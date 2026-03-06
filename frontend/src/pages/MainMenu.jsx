@@ -91,11 +91,29 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
     const navigate = useNavigate();
     const location = useLocation();
 
+    const areaPessoalPaths = [
+        '/app/rh/registospessoal', '/app/rh/turnos', '/app/rh/ferias',
+        '/app/rh/justificacoes/pessoal', '/app/rh/trocas-turno'
+    ];
+    const rhPaths = [
+        '/app/rh/registos', '/app/rh/registosv3', '/app/rh/plan',
+        '/app/rh/justificacoes/rh', '/app/rh/departamentos', '/app/rh/processamento',
+        '/app/rh/gestao-ferias', '/app/rh/justificacoes/chefe', '/app/rh/registos-chefe',
+        '/app/rh/colaboradores-departamento', '/app/rh/trocas-turno'
+    ];
+
     const getInitialState = () => {
         try {
             const stored = localStorage.getItem(MENU_ID);
-            return stored ? JSON.parse(stored) : { areaPessoal: true, rh: false };
-        } catch { return { areaPessoal: true, rh: false }; }
+            if (stored) return JSON.parse(stored);
+        } catch { /* ignore */ }
+        const currentPath = location.pathname;
+        const inRH = rhPaths.some(p => currentPath === p);
+        const inAreaPessoal = areaPessoalPaths.some(p => currentPath === p);
+        return {
+            areaPessoal: inAreaPessoal || !inRH,
+            rh: inRH,
+        };
     };
 
     const [openSections, setOpenSections] = useState(getInitialState);
@@ -127,7 +145,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
 
                     {/* Área Pessoal */}
                     <MenuSection title="Área Pessoal" icon={User} isOpen={openSections.areaPessoal} onToggle={() => toggleSection('areaPessoal')}>
-                        <MenuItem onClick={() => handleNavigation('/app/rh/registos-pessoal', { num: auth?.num })} icon={Clock} active={isActive('/app/rh/registos-pessoal')}>
+                        <MenuItem onClick={() => handleNavigation('/app/rh/registospessoal', { num: auth?.num })} icon={Clock} active={isActive('/app/rh/registospessoal')}>
                             Registo de Picagens
                         </MenuItem>
                         <MenuItem onClick={() => handleNavigation('/app/rh/turnos')} icon={Briefcase} active={isActive('/app/rh/turnos')}>

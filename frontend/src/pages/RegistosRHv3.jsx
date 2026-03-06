@@ -15,6 +15,7 @@ import { useModal } from "react-modal-hook";
 import ResponsiveModal from 'components/Modal';
 import YScroll from 'components/YScroll';
 import { LayoutContext } from "./GridLayout";
+import { AppContext } from "./App";
 import { RangeDateField } from 'components/FormFields';
 import DownloadReport from 'components/DownloadReportsV2';
 import DataTable from './DataTable';
@@ -371,6 +372,7 @@ const PageHeader = ({ title, subtitle, actions }) => (
 /* ─── MAIN COMPONENT ─── */
 export default function RegistosRHv3() {
     const { openNotification } = useContext(LayoutContext);
+    const { auth } = useContext(AppContext);
     const [showBiometrias, setShowBiometrias] = useState(false);
     const [showInvalidRecords, setShowInvalidRecords] = useState(false);
     const [showFix, setShowFix] = useState(false);
@@ -469,7 +471,15 @@ export default function RegistosRHv3() {
 
     const apiConfig = {
         url: `${API_URL}/rponto/sqlp/`,
-        method: 'RegistosRH'
+        method: 'RegistosRH',
+        extraFilter: {
+            isRH:             auth?.isRH    || false,
+            isAdmin:          auth?.isAdmin || false,
+            isChefe:          auth?.isChefe || false,
+            deps_chefe:       auth?.deps_chefe || [],
+            num:              auth?.num ?? '',
+            isPicagensV3List: true,
+        },
     };
 
     const defaultSort = [

@@ -36,6 +36,8 @@ export default () => {
                 isRH: decodedToken.isRH,
                 isChefe: decodedToken.isChefe    || false,  // ← usar isto
                 deps_chefe: decodedToken.deps_chefe || [],  
+                dep: decodedToken.dep || '',
+                tp_hor: decodedToken.tp_hor || '',
                 items: decodedToken.items
             };
             localStorage.setItem('auth', JSON.stringify(_auth));

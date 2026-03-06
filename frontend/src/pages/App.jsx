@@ -34,6 +34,15 @@ export const MediaContext = React.createContext({});
 export const SocketContext = React.createContext({});
 export const AppContext    = React.createContext({});
 
+/* ── Guarda de rota pública: redireciona utilizadores autenticados ── */
+const PublicRoute = ({ children }) => {
+    const { auth, authLoading } = useContext(AppContext);
+    if (authLoading) return <Spin />;
+    return auth.isAuthenticated
+        ? <Navigate to="/app/rh/ferias" replace />
+        : children;
+};
+
 /* ── Guarda de rota: só DPROD ─────────────────────────────────
    Regra:
    - Colaborador normal   → auth.dep === 'DPROD'
@@ -79,7 +88,11 @@ const RenderRouter = () => {
             element: <MainLayout />,
             children: [
                 { path: "login",
-                  element: <Suspense fallback={<Spin />}><Login /></Suspense> },
+                  element: (
+                      <PublicRoute>
+                          <Suspense fallback={<Spin />}><Login /></Suspense>
+                      </PublicRoute>
+                  ) },
 
                 /* ── RH ────────────────────────────────────────── */
                 { path: "rh/registos",
@@ -164,12 +177,13 @@ const App = () => {
             const authNormalizado = {
                 isAuthenticated: true,
                 ..._auth,
-                num: _auth.username,
                 dep: _auth.dep || '',
             };
 
             setAuth(authNormalizado);
-            console.log('[App] auth normalizado:', authNormalizado);
+            if (process.env.NODE_ENV === 'development') {
+                console.log('[App] auth normalizado:', authNormalizado);
+            }
         }
         setAuthLoading(false);
     }, []);
