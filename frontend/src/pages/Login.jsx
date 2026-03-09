@@ -23,20 +23,22 @@ export default () => {
             localStorage.removeItem('auth');
             const response = await axios.post('/api/token/', { username: values.username, password: values.password, remember }, { withCredentials: true });
             const decodedToken = jwt_decode(response.data.access);
-            const _auth = {
-                access_token: response.data.access,
+           const _auth = {
+                access_token:  response.data.access,
                 refresh_token: response.data.refresh,
-                username: values.username,
-                first_name: decodedToken.first_name,
-                last_name: decodedToken.last_name,
-                num: decodedToken.num,
-                email: decodedToken.email,
-                groups: decodedToken.groups,
-                isAdmin: decodedToken.isAdmin,
-                isRH: decodedToken.isRH,
-                isChefe: decodedToken.isChefe    || false,  // ← usar isto
-                deps_chefe: decodedToken.deps_chefe || [],  
-                items: decodedToken.items
+                username:      values.username,
+                first_name:    decodedToken.first_name,
+                last_name:     decodedToken.last_name,
+                num:           decodedToken.num,
+                email:         decodedToken.email,
+                groups:        decodedToken.groups,
+                isAdmin:       decodedToken.isAdmin,
+                isRH:          decodedToken.isRH,
+                isChefe:       decodedToken.isChefe    || false,
+                deps_chefe:    decodedToken.deps_chefe || [],
+                dep:           decodedToken.dep        || '',   
+                tp_hor:        decodedToken.tp_hor     || '',    
+                items:         decodedToken.items
             };
             localStorage.setItem('auth', JSON.stringify(_auth));
             setAuth({ isAuthenticated: true, ..._auth });

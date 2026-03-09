@@ -842,6 +842,95 @@ def InvalidRecordsList(request, format=None):
                     records.append({"k":f"f-{idx}-{random.randint(111111, 999999)}", "filename":fullpath,"tstamp":creation_date.strftime("%Y-%m-%d %H:%M:%S")})
     return Response({"rows":records})
 
+
+def UpdatePicagem(request, format=None):
+    try:
+        # Data arrives as: request.data['filter']['payload']
+        # (sent by fetchPost in the frontend)
+        filter_data = request.data.get('filter', {})
+        data = filter_data.get('payload', {})
+
+        # Fallback: also support direct body.data (for future use)
+        if not data:
+            body = request.data.get('body', {})
+            data = body.get('data', {})
+
+        # Last fallback: data might be at root of filter
+        if not data:
+            data = filter_data
+
+        num = data.get('num')
+        dts = data.get('dts')
+
+        if not num or not dts:
+            return Response({"status": "error", "title": "num e dts são obrigatórios"})
+
+        # Build update dict
+        update_fields = {}
+        total_picagens = 0
+
+        for i in range(1, 9):
+            padded = str(i).zfill(2)
+            ss_key = f'ss_{padded}'
+            ty_key = f'ty_{padded}'
+
+            ss_val = data.get(ss_key)
+            ty_val = data.get(ty_key)
+
+            if ss_val:
+                # Normalise datetime-local "YYYY-MM-DDTHH:MM" → "YYYY-MM-DD HH:MM:SS"
+                ss_str = str(ss_val).replace('T', ' ')
+                if len(ss_str) == 16:   # missing seconds
+                    ss_str = ss_str + ':00'
+                update_fields[ss_key] = ss_str
+                total_picagens += 1
+            else:
+                update_fields[ss_key] = None
+
+            update_fields[ty_key] = ty_val.strip() if ty_val else None
+
+        update_fields['nt']     = total_picagens
+        update_fields['edited'] = 1
+
+        with connections[connMssqlName].cursor() as cursor:
+            dts_clean = str(dts)[:10]
+
+            cursor.execute(
+                "SELECT id FROM rponto.dbo.time_registration "
+                "WHERE num = %s AND CAST(dts AS DATE) = %s",
+                [num, dts_clean]
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                return Response({
+                    "status": "error",
+                    "title": f"Registo não encontrado para num={num} dts={dts_clean}"
+                })
+
+            record_id = row[0]
+
+            dml = dbmssql.dml(
+                TypeDml.UPDATE,
+                update_fields,
+                "rponto.dbo.time_registration",
+                {"id": f"=={record_id}"},
+                None,
+                False
+            )
+            dbmssql.execute(dml.statement, cursor, dml.parameters)
+
+        return Response({
+            "status": "success",
+            "title": "Picagem actualizada com sucesso!"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+
 def UpdateRecords(request, format=None):
     values = request.data["parameters"].get("values")
     try:
@@ -1105,8 +1194,15 @@ def RegistosRH(request, format=None):
         # Colaborador autenticado (para restringir acesso pessoal)
         num_auth = str(filter_data.get('num') or '').strip()
 
+        # Fallback: RegistosRHPessoal envia apenas fnum quando num está vazio.
+        # Aceitar fnum como identidade SOMENTE quando não é RH/Admin/Chefe,
+        # para não interferir com a pesquisa por número dos outros papéis.
+        if not num_auth and not is_rh and not is_admin and not is_chefe:
+            fnum_fallback = str(filter_data.get('fnum') or '').replace('%', '').strip()
+            if fnum_fallback:
+                num_auth = fnum_fallback
+
         # Toggle para listagem geral no picagensv3
-        # (RH/Admin podem listar sem fnum)
         is_picagens_v3_list = bool(filter_data.get('isPicagensV3List', False))
 
         # ══════════════════════════════════════════════════════════
@@ -1143,9 +1239,7 @@ def RegistosRH(request, format=None):
 
         # Restrição base por papel
         if is_rh or is_admin:
-            # RH/Admin:
-            # - em listagem geral (isPicagensV3List=true): sem restrição base
-            # - fora disso: também podem pesquisar livremente (filtros opcionais)
+            # RH/Admin: sem restrição base — filtros opcionais abaixo
             pass
 
         elif is_chefe:
@@ -1162,21 +1256,19 @@ def RegistosRH(request, format=None):
             where_parts.append("TR.num = %(num_auth)s")
             parameters["num_auth"] = num_auth
 
-        # Filtro por número (compatível com endpoint antigo)
+        # Filtro por número
+        # Para colaborador normal: o fnum é a identidade (já tratado acima via num_auth),
+        # por isso só aplica fnum como filtro adicional para RH/Admin/Chefe.
         fnum_clean = str(fnum_value or '').replace('%', '').strip()
         if fnum_clean:
             if is_rh or is_admin or is_chefe:
                 where_parts.append("TR.num LIKE %(fnum)s")
                 parameters["fnum"] = f"%{fnum_clean}%"
-            else:
-                # colaborador não pesquisa terceiros
-                where_parts.append("TR.num = %(fnum)s")
-                parameters["fnum"] = fnum_clean
+            # Para colaborador normal não adicionamos filtro fnum separado
+            # porque num_auth já garante "TR.num = %(num_auth)s" acima.
+            # Evita duplicação do mesmo num no WHERE.
 
-        # RH/Admin sem fnum e sem modo listagem geral:
-        # mantém comportamento permissivo (não bloqueia), tal como antigamente.
-        # (is_picagens_v3_list fica como indicador de intenção do frontend)
-        _ = is_picagens_v3_list  # só para manter explícito que a flag é reconhecida
+        _ = is_picagens_v3_list  # reconhecido mas sem restrição extra
 
         # Filtro por data
         if fdata_value:
@@ -1190,10 +1282,10 @@ def RegistosRH(request, format=None):
                     start_date = formatted.get('startValue')
                     end_date   = formatted.get('endValue')
 
-            # formato: [">=YYYY-MM-DD", "<=YYYY-MM-DD"] ou datas
+            # formato: [">=YYYY-MM-DD", "<=YYYY-MM-DD"]
             elif isinstance(fdata_value, list) and len(fdata_value) >= 2:
-                raw_start = str(fdata_value[0]).replace(">=", "").strip()
-                raw_end   = str(fdata_value[1]).replace("<=", "").strip()
+                raw_start  = str(fdata_value[0]).replace(">=", "").strip()
+                raw_end    = str(fdata_value[1]).replace("<=", "").strip()
                 start_date = raw_start.split(' ')[0].strip()
                 end_date   = raw_end.split(' ')[0].strip()
 
@@ -1249,20 +1341,20 @@ def RegistosRH(request, format=None):
 
         if not response_rponto.get('rows'):
             return Response({
-                "rows": [],
-                "total": 0,
-                "page": dql.currentPage,
+                "rows":     [],
+                "total":    0,
+                "page":     dql.currentPage,
                 "pageSize": dql.pageSize,
-                "status": "success"
+                "status":   "success"
             })
 
         registos      = response_rponto.get('rows', [])
         total_records = response_rponto.get('total', 0)
 
-        # ═════════���════════════════════════════════════════════════
+        # ══════════════════════════════════════════════════════════
         # Enriquecer com nome colaborador (SAGE)
         # ══════════════════════════════════════════════════════════
-        nums_list = list({r.get('num') for r in registos if r.get('num')})
+        nums_list         = list({r.get('num') for r in registos if r.get('num')})
         funcionarios_dict = {}
 
         if nums_list:
@@ -1287,13 +1379,13 @@ def RegistosRH(request, format=None):
         for registro in registos:
             primeira_picagem_dt = None
 
-            # ty_01..ty_08
+            # ty_01..ty_08 — normalizar para lowercase sem espaços
             for i in range(1, 9):
                 ty_key = f"ty_{i:02d}"
                 if registro.get(ty_key):
                     registro[ty_key] = str(registro[ty_key]).strip().lower()
 
-            # ss_01..ss_08
+            # ss_01..ss_08 — converter para string normalizada
             for i in range(1, 9):
                 ss_key = f"ss_{i:02d}"
                 val = registro.get(ss_key)
@@ -1311,27 +1403,38 @@ def RegistosRH(request, format=None):
                     if isinstance(dt_obj, (datetime, date)):
                         registro[ss_key] = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
 
+            # Calcular data e tipo de turno
             if primeira_picagem_dt:
-                hora = primeira_picagem_dt.hour
-                data_turno = (primeira_picagem_dt - timedelta(days=1)).date() if hora < 6 else primeira_picagem_dt.date()
+                hora       = primeira_picagem_dt.hour
+                data_turno = (
+                    (primeira_picagem_dt - timedelta(days=1)).date()
+                    if hora < 6
+                    else primeira_picagem_dt.date()
+                )
                 registro['data_turno'] = data_turno.strftime('%Y-%m-%d')
                 registro['tipo_turno'] = identificar_tipo_turno(hora)
             else:
                 dts = registro.get('dts')
-                registro['data_turno'] = dts.strftime('%Y-%m-%d') if isinstance(dts, (datetime, date)) else str(dts)
+                registro['data_turno'] = (
+                    dts.strftime('%Y-%m-%d')
+                    if isinstance(dts, (datetime, date))
+                    else str(dts)
+                )
                 registro['tipo_turno'] = 'N/A'
 
             # Nome colaborador
             num = registro.get('num')
-            registro['nome_colaborador'] = funcionarios_dict.get(num, {}).get('NOME', 'Nome não disponível')
+            registro['nome_colaborador'] = (
+                funcionarios_dict.get(num, {}).get('NOME', 'Nome não disponível')
+            )
 
-            # Normalizar dts
+            # Normalizar dts para string
             if isinstance(registro.get('dts'), (datetime, date)):
                 registro['dts'] = registro['dts'].strftime('%Y-%m-%d %H:%M:%S')
 
             registos_normalizados.append(registro)
 
-        # Filtro por nome (pós-processamento)
+        # Filtro por nome (pós-processamento — só usado quando fnome enviado)
         if fnome_value:
             registos_normalizados = [
                 r for r in registos_normalizados
@@ -1340,11 +1443,11 @@ def RegistosRH(request, format=None):
             total_records = len(registos_normalizados)
 
         return Response({
-            "rows": registos_normalizados,
-            "total": total_records,
-            "page": dql.currentPage,
+            "rows":     registos_normalizados,
+            "total":    total_records,
+            "page":     dql.currentPage,
             "pageSize": dql.pageSize,
-            "status": "success"
+            "status":   "success"
         })
 
     except Exception as error:
@@ -6593,3 +6696,159 @@ def ColaboradoresDepartamento(request, format=None):
     except Exception as e:
         traceback.print_exc()
         return Response({"status": "error", "title": str(e)})
+
+#region Notificações
+
+def NotificacoesCount(request, format=None):
+    try:
+        filter_data = request.data.get('filter', {})
+        num         = (filter_data.get('num') or '').strip()
+        is_chefe    = bool(filter_data.get('isChefe', False))
+        deps_chefe  = filter_data.get('deps_chefe', []) or []
+
+        if not num:
+            return Response({"count": 0, "status": "success"})
+
+        count = 0
+
+        with connections[connMssqlName].cursor() as cursor:
+            # 1. Trocas onde o colaborador é destino e ainda não respondeu
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM rponto.dbo.trocas_turno
+                WHERE num_dest = %s
+                  AND estado   = 'pendente'
+            """, [num])
+            count += cursor.fetchone()[0]
+
+            # 2. Chefe de DPROD: trocas aceites que aguardam aprovação
+            if is_chefe and 'DPROD' in [d.strip() for d in deps_chefe]:
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM rponto.dbo.trocas_turno
+                    WHERE estado    = 'aceite_dest'
+                      AND (RTRIM(LTRIM(dep_req))  = 'DPROD'
+                        OR RTRIM(LTRIM(dep_dest)) = 'DPROD')
+                """)
+                count += cursor.fetchone()[0]
+
+        return Response({"count": count, "status": "success"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"count": 0, "status": "error", "title": str(e)})
+
+
+def NotificacoesList(request, format=None):
+    try:
+        filter_data = request.data.get('filter', {})
+        num         = (filter_data.get('num') or '').strip()
+        is_chefe    = bool(filter_data.get('isChefe', False))
+        deps_chefe  = filter_data.get('deps_chefe', []) or []
+
+        if not num:
+            return Response({"rows": [], "total": 0, "status": "success"})
+
+        notificacoes = []
+
+        with connections[connMssqlName].cursor() as cursor:
+            # 1. Trocas pendentes de resposta (colaborador é destino)
+            cursor.execute("""
+                SELECT
+                    id,
+                    num_req,
+                    CONVERT(VARCHAR(10), data_req,  23) AS data_req,
+                    CONVERT(VARCHAR(10), data_dest, 23) AS data_dest,
+                    turno_req,
+                    turno_dest,
+                    obs_req,
+                    CONVERT(VARCHAR(19), created_at, 120) AS created_at
+                FROM rponto.dbo.trocas_turno
+                WHERE num_dest = %s
+                  AND estado   = 'pendente'
+                ORDER BY created_at DESC
+            """, [num])
+            cols = [c[0] for c in cursor.description]
+            trocas_pendentes = [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+            # Enriquecer com nome do requerente
+            nums_req = list({r['num_req'] for r in trocas_pendentes if r.get('num_req')})
+            nomes    = {}
+            if nums_req:
+                nomes = _get_nomes_colaboradores(nums_req)
+
+            for t in trocas_pendentes:
+                nome_req = nomes.get(t['num_req'], {}).get('nome', t['num_req'])
+                notificacoes.append({
+                    "id":       f"troca_{t['id']}",
+                    "troca_id": t['id'],
+                    "tipo":     "troca_pendente",
+                    "titulo":   "Pedido de Troca de Turno",
+                    "mensagem": (
+                        f"{nome_req} quer trocar o seu turno "
+                        f"de {t['data_dest']} ({t['turno_dest']}) "
+                        f"com o turno de {t['data_req']} ({t['turno_req']})"
+                    ),
+                    "data":     t['created_at'],
+                    "lida":     False,
+                    "acao":     "responder",   # o frontend usa isto para saber o que renderizar
+                })
+
+            # 2. Chefe DPROD: trocas aceites que aguardam aprovação
+            if is_chefe and 'DPROD' in [d.strip() for d in deps_chefe]:
+                cursor.execute("""
+                    SELECT
+                        id,
+                        num_req,
+                        num_dest,
+                        CONVERT(VARCHAR(10), data_req,  23) AS data_req,
+                        CONVERT(VARCHAR(10), data_dest, 23) AS data_dest,
+                        turno_req,
+                        turno_dest,
+                        CONVERT(VARCHAR(19), created_at, 120) AS created_at
+                    FROM rponto.dbo.trocas_turno
+                    WHERE estado    = 'aceite_dest'
+                      AND (RTRIM(LTRIM(dep_req))  = 'DPROD'
+                        OR RTRIM(LTRIM(dep_dest)) = 'DPROD')
+                    ORDER BY created_at DESC
+                """)
+                cols_chefe = [c[0] for c in cursor.description]
+                trocas_chefe = [dict(zip(cols_chefe, r)) for r in cursor.fetchall()]
+
+                nums_all = list({r['num_req'] for r in trocas_chefe} |
+                                {r['num_dest'] for r in trocas_chefe})
+                nomes_all = _get_nomes_colaboradores(nums_all) if nums_all else {}
+
+                for t in trocas_chefe:
+                    nome_req  = nomes_all.get(t['num_req'],  {}).get('nome', t['num_req'])
+                    nome_dest = nomes_all.get(t['num_dest'], {}).get('nome', t['num_dest'])
+                    notificacoes.append({
+                        "id":       f"chefe_troca_{t['id']}",
+                        "troca_id": t['id'],
+                        "tipo":     "troca_aprovar",
+                        "titulo":   "Troca Aguarda Aprovação",
+                        "mensagem": (
+                            f"Troca entre {nome_req} ({t['data_req']}) "
+                            f"e {nome_dest} ({t['data_dest']}) aceite — aguarda a sua aprovação"
+                        ),
+                        "data":     t['created_at'],
+                        "lida":     False,
+                        "acao":     "aprovar",
+                    })
+
+        # Ordenar por data desc
+        notificacoes.sort(key=lambda x: x['data'] or '', reverse=True)
+
+        return Response({
+            "rows":   notificacoes,
+            "total":  len(notificacoes),
+            "status": "success"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"rows": [], "total": 0, "status": "error", "title": str(e)})
+
+
+def MarcarNotificacaoLida(request, format=None):
+    return Response({"status": "success"})

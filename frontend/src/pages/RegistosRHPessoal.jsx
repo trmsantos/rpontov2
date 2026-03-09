@@ -88,30 +88,20 @@ export default function RegistosRHPessoal() {
         }
     ];
 
-    // ── CORRIGIDO ──────────────────────────────────────────────
-    // defaultFilter  → é sempre enviado, invisível no UI,
-    //                  NÃO pode ser alterado pelo utilizador.
-    //                  fnum com match EXATO (não LIKE) no backend.
-    //
-    // extraFilter    → papel do utilizador — garante que o backend
-    //                  aplica a lógica de colaborador normal
-    //                  (match exato pelo fnum, sem filtro de dep).
-    // ────────────────────────────────────���─────────────────────
     const apiConfig = {
         url:    `${API_URL}/rponto/sqlp/`,
         method: 'RegistosRH',
 
-        // Força sempre o número do colaborador autenticado
-        // O backend usa match EXATO quando isRH=false && isChefe=false
-        defaultFilter: {
-            fnum: auth?.num ?? '',
-        },
-
-        // Papel: colaborador normal → sem acesso a outros registos
+        // extraFilter is always merged into the filter sent to the backend.
+        // 'num' → read by the backend as num_auth (identity, not a search param).
+        // isRH/isChefe: false → forces the "colaborador normal" path in RegistosRH,
+        //   which adds  "TR.num = %(num_auth)s"  to the WHERE clause.
         extraFilter: {
             isRH:       false,
+            isAdmin:    false,
             isChefe:    false,
             deps_chefe: [],
+            num:        auth?.num ?? '',   // identity sent as filter_data['num']
         },
     };
 

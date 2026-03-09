@@ -4,7 +4,7 @@ import { Drawer, Input, Image, Form, Button, Space, Alert, Spin, Empty, Badge } 
 import {
     CameraOutlined, SearchOutlined, SyncOutlined, SaveOutlined,
     CloseOutlined, UserOutlined, WarningOutlined, ExclamationCircleOutlined,
-    FilterOutlined, ReloadOutlined
+    FilterOutlined, ReloadOutlined, LoginOutlined, LogoutOutlined, SwapOutlined
 } from '@ant-design/icons';
 import { fetchPost } from "utils/fetch";
 import { useSubmitting } from "utils";
@@ -15,6 +15,7 @@ import { useModal } from "react-modal-hook";
 import ResponsiveModal from 'components/Modal';
 import YScroll from 'components/YScroll';
 import { LayoutContext } from "./GridLayout";
+import { AppContext } from "./App";
 import { RangeDateField } from 'components/FormFields';
 import DownloadReport from 'components/DownloadReportsV2';
 import DataTable from './DataTable';
@@ -191,7 +192,6 @@ const InvalidRecords = ({ openNotification }) => {
         <div className="flex flex-col h-full bg-slate-50">
             <SectionHeader title="Registos Inválidos" subtitle="Capturas sem identificação válida" />
 
-            {/* Filter Bar */}
             <div className="px-4 py-3 bg-white border-b border-slate-100">
                 <Form form={formFilter} layout="inline" onFinish={handleFilter}>
                     <Form.Item name="fnum" className="mb-0">
@@ -253,34 +253,47 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
         { value: "out", label: "Saída" }
     ];
 
+    const toDatetimeLocal = (val) => {
+        if (!val) return '';
+        const s = typeof val === 'string' ? val : String(val);
+        if (s.includes('T')) return s.slice(0, 16);
+        const parts = s.split(' ');
+        if (parts.length === 2) return `${parts[0]}T${parts[1].slice(0, 5)}`;
+        return s.slice(0, 16);
+    };
+
     useEffect(() => {
         if (!record) return;
-        form.setFieldsValue({
+        const fields = {
             num: record.num,
-            dts: record.dts ? dayjs(record.dts).format(DATE_FORMAT) : '',
-            ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(i => [
-                `ss_${String(i).padStart(2, '0')}`,
-                record[`ss_${String(i).padStart(2, '0')}`] ? dayjs(record[`ss_${String(i).padStart(2, '0')}`]) : null
-            ])),
-            ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(i => [
-                `ty_${String(i).padStart(2, '0')}`,
-                record[`ty_${String(i).padStart(2, '0')}`]?.trim() || null
-            ]))
-        });
+            dts: record.dts ? String(record.dts).slice(0, 10) : '',
+        };
+        for (let i = 1; i <= 8; i++) {
+            const padded = String(i).padStart(2, '0');
+            fields[`ss_${padded}`] = toDatetimeLocal(record[`ss_${padded}`]);
+            fields[`ty_${padded}`] = record[`ty_${padded}`] ? String(record[`ty_${padded}`]).trim() : '';
+        }
+        form.setFieldsValue(fields);
     }, [record, form]);
 
     const handleSave = async (values) => {
         submitting.trigger();
+        setFormStatus({ error: [] });
         try {
-            const payload = {
-                ...values,
-                dts: values.dts,
-                ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(i => [
-                    `ss_${String(i).padStart(2, '0')}`,
-                    values[`ss_${String(i).padStart(2, '0')}`]?.format?.(DATETIME_FORMAT) || null
-                ]))
-            };
-            await fetchPost({ url: `${API_URL}/rponto/sqlp/`, withCredentials: true, body: { method: "UpdatePicagem", data: payload } });
+            const payload = { num: values.num, dts: values.dts };
+            for (let i = 1; i <= 8; i++) {
+                const padded = String(i).padStart(2, '0');
+                payload[`ss_${padded}`] = values[`ss_${padded}`] || null;
+                payload[`ty_${padded}`] = values[`ty_${padded}`] || null;
+            }
+
+            await fetchPost({
+                url: `${API_URL}/rponto/sqlp/`,
+                withCredentials: true,
+                parameters: { method: "UpdatePicagem" },
+                filter: { payload }       
+            });
+
             openNotification("success", 'top', "Sucesso", "Registo actualizado com sucesso!");
             onSave();
         } catch (e) {
@@ -293,7 +306,6 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
 
     return (
         <div className="flex flex-col h-full bg-slate-50">
-            {/* Record Info Header */}
             <div className="px-5 py-4 bg-white border-b border-slate-100">
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold text-slate-600 text-sm">
@@ -301,7 +313,7 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
                     </div>
                     <div>
                         <p className="font-bold text-slate-800">{record?.SRN_0} {record?.NAM_0}</p>
-                        <p className="text-xs text-slate-500">{record?.dts ? dayjs(record.dts).format(DATE_FORMAT) : '—'}</p>
+                        <p className="text-xs text-slate-500">{record?.dts ? String(record.dts).slice(0, 10) : '—'}</p>
                     </div>
                 </div>
             </div>
@@ -314,7 +326,6 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
                 <div className="p-5">
                     <Spin spinning={submitting.state}>
                         <Form form={form} layout="vertical" onFinish={handleSave} disabled={submitting.state}>
-                            {/* Hidden fields */}
                             <Form.Item name="num" hidden><Input /></Form.Item>
                             <Form.Item name="dts" hidden><Input /></Form.Item>
 
@@ -328,10 +339,22 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
                                                 <span className="w-6 h-6 rounded-lg bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600">{i}</span>
                                                 <span className="text-sm font-semibold text-slate-700">Picagem {padded}</span>
                                             </div>
-                                            <Form.Item name={`ss_${padded}`} className="mb-2">
-                                                <Input placeholder="Data e Hora" size="small" type="datetime-local" className="rounded-lg" />
+                                            <Form.Item
+                                                name={`ss_${padded}`}
+                                                label={<span className="text-xs text-slate-500">Data e Hora</span>}
+                                                className="mb-2"
+                                            >
+                                                <input
+                                                    type="datetime-local"
+                                                    className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    onChange={e => form.setFieldValue(`ss_${padded}`, e.target.value)}
+                                                />
                                             </Form.Item>
-                                            <Form.Item name={`ty_${padded}`} className="mb-0">
+                                            <Form.Item
+                                                name={`ty_${padded}`}
+                                                label={<span className="text-xs text-slate-500">Tipo</span>}
+                                                className="mb-0"
+                                            >
                                                 <select className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
                                                     {typeOptions.map(t => (
                                                         <option key={t.value} value={t.value}>{t.label}</option>
@@ -368,18 +391,52 @@ const PageHeader = ({ title, subtitle, actions }) => (
     </div>
 );
 
+/* ─── Picagem Type Filter Toggle ─── */
+// typeFilter: 'all' | 'in' | 'out'
+const PicagemTypeFilter = ({ value, onChange }) => {
+    const options = [
+        { key: 'all',  label: 'Todas',    icon: <SwapOutlined />,    active: 'bg-slate-800 text-white', inactive: 'bg-white text-slate-600 hover:bg-slate-50' },
+        { key: 'in',   label: 'Entradas', icon: <LoginOutlined />,   active: 'bg-green-600 text-white', inactive: 'bg-white text-slate-600 hover:bg-green-50' },
+        { key: 'out',  label: 'Saídas',   icon: <LogoutOutlined />,  active: 'bg-red-500 text-white',   inactive: 'bg-white text-slate-600 hover:bg-red-50' },
+    ];
+
+    return (
+        <div className="flex items-center rounded-lg border border-slate-200 overflow-hidden shadow-sm">
+            {options.map(opt => (
+                <button
+                    key={opt.key}
+                    onClick={() => onChange(opt.key)}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold transition-all border-r border-slate-200 last:border-r-0
+                        ${value === opt.key ? opt.active : opt.inactive}`}
+                >
+                    {opt.icon}
+                    {opt.label}
+                </button>
+            ))}
+        </div>
+    );
+};
+
 /* ─── MAIN COMPONENT ─── */
 export default function RegistosRHv3() {
     const { openNotification } = useContext(LayoutContext);
+    const { auth } = useContext(AppContext);
     const [showBiometrias, setShowBiometrias] = useState(false);
     const [showInvalidRecords, setShowInvalidRecords] = useState(false);
     const [showFix, setShowFix] = useState(false);
     const [selectedRecord, setSelectedRecord] = useState(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
+    // 'all' | 'in' | 'out'
+    const [typeFilter, setTypeFilter] = useState('all');
+
     const toolbarButtons = (filters) => (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
             <DownloadReport filters={filters} />
+
+            {/* Picagem type filter */}
+            <PicagemTypeFilter value={typeFilter} onChange={setTypeFilter} />
+
             <button
                 onClick={() => setShowBiometrias(true)}
                 className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm"
@@ -394,6 +451,26 @@ export default function RegistosRHv3() {
             </button>
         </div>
     );
+
+    /**
+     * Determines whether a picagem cell should be visible given the current typeFilter.
+     *
+     * Rules:
+     *  - 'all'  → always show
+     *  - 'in'   → show only if ty === 'in'  (hide 'out' and undefined)
+     *  - 'out'  → show only if ty === 'out' (hide 'in'  and undefined)
+     *
+     * @param {string|null|undefined} typeVal  — the ty_xx value from the row
+     * @param {boolean} hasValue               — whether ss_xx is non-null
+     */
+    const isPicagemVisible = (typeVal, hasValue) => {
+        if (!hasValue) return false; // no value → always —
+        if (typeFilter === 'all') return true;
+        const t = typeVal ? String(typeVal).trim().toLowerCase() : null;
+        if (typeFilter === 'in')  return t === 'in';
+        if (typeFilter === 'out') return t === 'out';
+        return true;
+    };
 
     const columns = [
         {
@@ -425,14 +502,41 @@ export default function RegistosRHv3() {
             )
         },
         {
-            title: 'Picagens',
-            dataIndex: 'nt',
-            style: { minWidth: 80, textAlign: 'center' },
-            render: (val) => (
-                <span className="inline-flex items-center justify-center w-7 h-7 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold">
-                    {val || 0}
+            // Show count of visible picagens based on current filter
+            title: () => (
+                <span className="inline-flex items-center gap-1">
+                    Picagens
+                    {typeFilter !== 'all' && (
+                        <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${typeFilter === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {typeFilter === 'in' ? 'ENT' : 'SAÍ'}
+                        </span>
+                    )}
                 </span>
-            )
+            ),
+            dataIndex: 'nt',
+            style: { minWidth: 90, textAlign: 'center' },
+            render: (val, row) => {
+                // Count visible picagens for current filter
+                let visible = 0;
+                if (typeFilter === 'all') {
+                    visible = val || 0;
+                } else {
+                    for (let i = 1; i <= 8; i++) {
+                        const padded = String(i).padStart(2, '0');
+                        const ssVal = row[`ss_${padded}`];
+                        const tyVal = row[`ty_${padded}`];
+                        if (ssVal && isPicagemVisible(tyVal, true)) visible++;
+                    }
+                }
+                return (
+                    <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-xs font-bold
+                        ${typeFilter === 'in'  ? 'bg-green-50 text-green-700' :
+                          typeFilter === 'out' ? 'bg-red-50 text-red-700' :
+                          'bg-blue-50 text-blue-700'}`}>
+                        {visible}
+                    </span>
+                );
+            }
         },
         ...[...Array(8)].map((_, i) => ({
             title: `P${i + 1}`,
@@ -441,15 +545,21 @@ export default function RegistosRHv3() {
             render: (val, row) => {
                 const typeVal = row[`ty_${String(i + 1).padStart(2, '0')}`];
                 const type = typeVal ? String(typeVal).trim().toLowerCase() : null;
-                return val ? (
+
+                // Apply type filter
+                if (!isPicagemVisible(typeVal, !!val)) {
+                    return <span className="text-slate-200 text-[10px]">—</span>;
+                }
+
+                return (
                     <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap
-                        ${type === 'in' ? 'bg-green-50 text-green-700 ring-1 ring-green-200' :
+                        ${type === 'in'  ? 'bg-green-50 text-green-700 ring-1 ring-green-200' :
                           type === 'out' ? 'bg-red-50 text-red-700 ring-1 ring-red-200' :
                           'bg-slate-50 text-slate-600'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${type === 'in' ? 'bg-green-500' : type === 'out' ? 'bg-red-500' : 'bg-slate-400'}`} />
                         {dayjs(val).format('HH:mm')}
                     </div>
-                ) : <span className="text-slate-300 text-[10px]">—</span>;
+                );
             }
         }))
     ];
@@ -469,7 +579,15 @@ export default function RegistosRHv3() {
 
     const apiConfig = {
         url: `${API_URL}/rponto/sqlp/`,
-        method: 'RegistosRH'
+        method: 'RegistosRH',
+        extraFilter: {
+            isRH:             auth?.isRH    || false,
+            isAdmin:          auth?.isAdmin || false,
+            isChefe:          auth?.isChefe || false,
+            deps_chefe:       auth?.deps_chefe || [],
+            num:              auth?.num ?? '',
+            isPicagensV3List: true,
+        },
     };
 
     const defaultSort = [

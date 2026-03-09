@@ -88,17 +88,35 @@ const LogoutModal = ({ isOpen, onClose, onConfirm, auth }) => {
 };
 
 export default ({ onToggleDrawer, handleLogout, auth }) => {
-    const navigate = useNavigate();
-    const location = useLocation();
+    const navigate  = useNavigate();
+    const location  = useLocation();
+
+    const areaPessoalPaths = [
+        '/app/rh/registos-pessoal', '/app/rh/turnos', '/app/rh/ferias',
+        '/app/rh/justificacoes/pessoal', '/app/rh/trocas-turno'
+    ];
+    const rhPaths = [
+        '/app/rh/registos', '/app/rh/registosv3', '/app/rh/plan',
+        '/app/rh/justificacoes/rh', '/app/rh/departamentos', '/app/rh/processamento',
+        '/app/rh/gestao-ferias', '/app/rh/justificacoes/chefe', '/app/rh/registos-chefe',
+        '/app/rh/colaboradores-departamento', '/app/rh/trocas-turno'
+    ];
 
     const getInitialState = () => {
         try {
             const stored = localStorage.getItem(MENU_ID);
-            return stored ? JSON.parse(stored) : { areaPessoal: true, rh: false };
-        } catch { return { areaPessoal: true, rh: false }; }
+            if (stored) return JSON.parse(stored);
+        } catch { /* ignore */ }
+        const currentPath = location.pathname;
+        const inRH        = rhPaths.some(p => currentPath === p);
+        const inAreaPessoal = areaPessoalPaths.some(p => currentPath === p);
+        return {
+            areaPessoal: inAreaPessoal || !inRH,
+            rh:          inRH,
+        };
     };
 
-    const [openSections, setOpenSections] = useState(getInitialState);
+    const [openSections,    setOpenSections]    = useState(getInitialState);
     const [showLogoutModal, setShowLogoutModal] = useState(false);
 
     const toggleSection = (key) => {
@@ -112,87 +130,176 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
         if (onToggleDrawer) onToggleDrawer();
     };
 
-    const isActive = (path) => location.pathname === path;
-    const userIsRH = isRH(auth);
+    const isActive    = (path) => location.pathname === path;
+    const userIsRH    = isRH(auth);
     const userIsChefe = auth?.isChefe;
 
-    const temAcessoTrocas = !userIsRH && (
-        auth?.dep === 'DPROD' || (auth?.deps_chefe || []).includes('DPROD')
-    );
+    // Trocas de turno: APENAS chefe do departamento DPROD
+    // Colaboradores normais NÃO têm acesso — a troca é iniciada pelo chefe
+    const temAcessoTrocas = userIsChefe &&
+        (auth?.deps_chefe || []).map(d => String(d).trim()).includes('DPROD');
 
     return (
         <>
             <div className="flex flex-col h-full">
                 <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5 scrollbar-thin scrollbar-thumb-white/10">
 
-                    {/* Área Pessoal */}
-                    <MenuSection title="Área Pessoal" icon={User} isOpen={openSections.areaPessoal} onToggle={() => toggleSection('areaPessoal')}>
-                        <MenuItem onClick={() => handleNavigation('/app/rh/registos-pessoal', { num: auth?.num })} icon={Clock} active={isActive('/app/rh/registos-pessoal')}>
+                    {/* ── Área Pessoal ── */}
+                    <MenuSection
+                        title="Área Pessoal"
+                        icon={User}
+                        isOpen={openSections.areaPessoal}
+                        onToggle={() => toggleSection('areaPessoal')}
+                    >
+                        <MenuItem
+                            onClick={() => handleNavigation('/app/rh/registos-pessoal', { num: auth?.num })}
+                            icon={Clock}
+                            active={isActive('/app/rh/registos-pessoal')}
+                        >
                             Registo de Picagens
                         </MenuItem>
-                        <MenuItem onClick={() => handleNavigation('/app/rh/turnos')} icon={Briefcase} active={isActive('/app/rh/turnos')}>
+                        <MenuItem
+                            onClick={() => handleNavigation('/app/rh/turnos')}
+                            icon={Briefcase}
+                            active={isActive('/app/rh/turnos')}
+                        >
                             Plano de Horário
                         </MenuItem>
-                        <MenuItem onClick={() => handleNavigation('/app/rh/ferias')} icon={Palmtree} active={isActive('/app/rh/ferias')}>
+                        <MenuItem
+                            onClick={() => handleNavigation('/app/rh/ferias')}
+                            icon={Palmtree}
+                            active={isActive('/app/rh/ferias')}
+                        >
                             Pedido de Férias
                         </MenuItem>
-                        <MenuItem onClick={() => handleNavigation('/app/rh/justificacoes/pessoal')} icon={FileText} active={isActive('/app/rh/justificacoes/pessoal')}>
+                        <MenuItem
+                            onClick={() => handleNavigation('/app/rh/justificacoes/pessoal')}
+                            icon={FileText}
+                            active={isActive('/app/rh/justificacoes/pessoal')}
+                        >
                             Justificações
                         </MenuItem>
+                        {/* Trocas de turno — APENAS chefe do DPROD, visível na Área Pessoal */}
                         {temAcessoTrocas && (
-                            <MenuItem onClick={() => handleNavigation('/app/rh/trocas-turno')} icon={ArrowLeftRight} active={isActive('/app/rh/trocas-turno')}>
+                            <MenuItem
+                                onClick={() => handleNavigation('/app/rh/trocas-turno')}
+                                icon={ArrowLeftRight}
+                                active={isActive('/app/rh/trocas-turno')}
+                            >
                                 Trocas de Turno
                             </MenuItem>
                         )}
                     </MenuSection>
 
-                    {/* Recursos Humanos */}
+                    {/* ── Recursos Humanos ── */}
                     {(userIsRH || userIsChefe) && (
-                        <MenuSection title="Recursos Humanos" icon={Users} isOpen={openSections.rh} onToggle={() => toggleSection('rh')}>
+                        <MenuSection
+                            title="Recursos Humanos"
+                            icon={Users}
+                            isOpen={openSections.rh}
+                            onToggle={() => toggleSection('rh')}
+                        >
                             {userIsRH && (
                                 <>
-                                    <MenuItem onClick={() => window.location.assign(ROOT_URL)} icon={LayoutDashboard}>
+                                    <MenuItem
+                                        onClick={() => window.location.assign(ROOT_URL)}
+                                        icon={LayoutDashboard}
+                                    >
                                         Relógio de Ponto
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/registos', { num: null })} icon={Clock} active={isActive('/app/rh/registos')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/registos', { num: null })}
+                                        icon={Clock}
+                                        active={isActive('/app/rh/registos')}
+                                    >
                                         Registo de Picagens
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/registosv3', { num: null })} icon={Clock} active={isActive('/app/rh/registosv3')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/registosv3', { num: null })}
+                                        icon={Clock}
+                                        active={isActive('/app/rh/registosv3')}
+                                    >
                                         Picagens V3
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/plan', { num: null })} icon={Calendar} active={isActive('/app/rh/plan')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/plan', { num: null })}
+                                        icon={Calendar}
+                                        active={isActive('/app/rh/plan')}
+                                    >
                                         Plano de Horários
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/justificacoes/rh')} icon={FileText} active={isActive('/app/rh/justificacoes/rh')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/justificacoes/rh')}
+                                        icon={FileText}
+                                        active={isActive('/app/rh/justificacoes/rh')}
+                                    >
                                         Justificações (RH)
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/departamentos')} icon={BanknoteIcon} active={isActive('/app/rh/departamentos')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/departamentos')}
+                                        icon={BanknoteIcon}
+                                        active={isActive('/app/rh/departamentos')}
+                                    >
                                         Departamentos e Chefes
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/processamento')} icon={BarChart2} active={isActive('/app/rh/processamento')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/processamento')}
+                                        icon={BarChart2}
+                                        active={isActive('/app/rh/processamento')}
+                                    >
                                         Processamento Salarial
                                     </MenuItem>
-                                    <MenuItem onClick={() => handleNavigation('/app/rh/gestao-ferias')} icon={Palmtree} active={isActive('/app/rh/gestao-ferias')}>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/gestao-ferias')}
+                                        icon={Palmtree}
+                                        active={isActive('/app/rh/gestao-ferias')}
+                                    >
                                         Gestão de Férias (RH)
                                     </MenuItem>
                                 </>
                             )}
-                            <MenuItem onClick={() => handleNavigation('/app/rh/justificacoes/chefe')} icon={CheckSquare} active={isActive('/app/rh/justificacoes/chefe')}>
+
+                            <MenuItem
+                                onClick={() => handleNavigation('/app/rh/justificacoes/chefe')}
+                                icon={CheckSquare}
+                                active={isActive('/app/rh/justificacoes/chefe')}
+                            >
                                 {userIsRH ? 'Justificações (Chefe)' : 'Justificações do Dep.'}
                             </MenuItem>
+
                             {!userIsRH && (
-                                <MenuItem onClick={() => handleNavigation('/app/rh/gestao-ferias')} icon={Palmtree} active={isActive('/app/rh/gestao-ferias')}>
+                                <MenuItem
+                                    onClick={() => handleNavigation('/app/rh/gestao-ferias')}
+                                    icon={Palmtree}
+                                    active={isActive('/app/rh/gestao-ferias')}
+                                >
                                     Gestão de Férias (Chefe)
                                 </MenuItem>
                             )}
-                            <MenuItem onClick={() => handleNavigation('/app/rh/registos-chefe')} icon={Clock} active={isActive('/app/rh/registos-chefe')}>
+
+                            <MenuItem
+                                onClick={() => handleNavigation('/app/rh/registos-chefe')}
+                                icon={Clock}
+                                active={isActive('/app/rh/registos-chefe')}
+                            >
                                 Picagens do Departamento
                             </MenuItem>
-                            <MenuItem onClick={() => handleNavigation('/app/rh/colaboradores-departamento')} icon={ClipboardList} active={isActive('/app/rh/colaboradores-departamento')}>
+
+                            <MenuItem
+                                onClick={() => handleNavigation('/app/rh/colaboradores-departamento')}
+                                icon={ClipboardList}
+                                active={isActive('/app/rh/colaboradores-departamento')}
+                            >
                                 Colaboradores do Dep.
                             </MenuItem>
-                            {temAcessoTrocas && userIsChefe && (
-                                <MenuItem onClick={() => handleNavigation('/app/rh/trocas-turno')} icon={ArrowLeftRight} active={isActive('/app/rh/trocas-turno')}>
+
+                            {/* Trocas de turno na secção RH — apenas chefe do DPROD */}
+                            {temAcessoTrocas && (
+                                <MenuItem
+                                    onClick={() => handleNavigation('/app/rh/trocas-turno')}
+                                    icon={ArrowLeftRight}
+                                    active={isActive('/app/rh/trocas-turno')}
+                                >
                                     Trocas de Turno (DPROD)
                                 </MenuItem>
                             )}
@@ -200,7 +307,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                     )}
                 </nav>
 
-                {/* Footer do menu */}
+                {/* Footer */}
                 <div className="shrink-0 p-3 border-t border-white/5">
                     <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/5 mb-1.5 hover:bg-white/8 transition-colors cursor-pointer group">
                         <div className={`h-8 w-8 rounded-full bg-gradient-to-br ${userIsRH ? 'from-purple-500 to-purple-700' : userIsChefe ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-blue-700'} text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0`}>
@@ -226,7 +333,12 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                 </div>
             </div>
 
-            <LogoutModal isOpen={showLogoutModal} onClose={() => setShowLogoutModal(false)} onConfirm={handleLogout} auth={auth} />
+            <LogoutModal
+                isOpen={showLogoutModal}
+                onClose={() => setShowLogoutModal(false)}
+                onConfirm={handleLogout}
+                auth={auth}
+            />
         </>
     );
 };

@@ -1,11 +1,13 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { notification, Badge } from 'antd';
-import Logo from 'assets/logowhite.svg';
+import { notification } from 'antd';
 import { AppContext } from './App';
 import MainMenu from './MainMenu';
-import { Menu as MenuIcon, X, Bell, Search, ChevronRight } from 'lucide-react';
+import { Menu as MenuIcon, X, Bell, Search, ChevronRight, ArrowLeftRight, CheckSquare, RefreshCw } from 'lucide-react';
 import { isRH } from './commons';
+import { fetchPost } from 'utils/fetch';
+import { API_URL } from 'config';
+import dayjs from 'dayjs';
 
 export const LayoutContext = React.createContext({});
 
@@ -27,11 +29,189 @@ const ROUTE_LABELS = {
     '/app/rh/registos-pessoal':           { label: 'As Minhas Picagens',             icon: '🕐' },
 };
 
+// ── Ícone por tipo de notificação ───────────────────────────────
+const NotifIcon = ({ tipo }) => {
+    if (tipo === 'troca_pendente') return <ArrowLeftRight size={14} className="text-indigo-500 shrink-0 mt-0.5" />;
+    if (tipo === 'troca_aprovar')  return <CheckSquare    size={14} className="text-amber-500  shrink-0 mt-0.5" />;
+    return <Bell size={14} className="text-slate-400 shrink-0 mt-0.5" />;
+};
+
+// ── Dropdown de Notificações ──────────────────────────────────���─
+const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRefresh }) => (
+    <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
+            <div className="flex items-center gap-2">
+                <Bell size={14} className="text-slate-600" />
+                <span className="text-sm font-bold text-slate-700">Notificações</span>
+                {notificacoes.length > 0 && (
+                    <span className="px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-black rounded-full">
+                        {notificacoes.length}
+                    </span>
+                )}
+            </div>
+            <button
+                onClick={onRefresh}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-lg transition-colors"
+                title="Actualizar"
+            >
+                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            </button>
+        </div>
+
+        {/* Lista */}
+        <div className="max-h-72 overflow-y-auto">
+            {loading && notificacoes.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-slate-400">
+                    <RefreshCw size={16} className="animate-spin mr-2" />
+                    <span className="text-sm">A carregar...</span>
+                </div>
+            ) : notificacoes.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-slate-400">
+                    <Bell size={24} className="mb-2 opacity-30" />
+                    <span className="text-sm font-medium">Sem notificações</span>
+                </div>
+            ) : (
+                notificacoes.map((n) => (
+                    <button
+                        key={n.id}
+                        onClick={() => {
+                            onNavigate('/app/rh/trocas-turno');
+                            onClose();
+                        }}
+                        className="w-full flex items-start gap-3 px-4 py-3 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-b-0 text-left group"
+                    >
+                        <NotifIcon tipo={n.tipo} />
+                        <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-slate-800 group-hover:text-indigo-700 leading-snug">
+                                {n.titulo}
+                            </p>
+                            <p className="text-[11px] text-slate-500 mt-0.5 leading-snug line-clamp-2">
+                                {n.mensagem}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-1">
+                                {n.data ? dayjs(n.data).format('DD/MM/YYYY HH:mm') : ''}
+                            </p>
+                        </div>
+                        {/* Ponto de não lida */}
+                        {!n.lida && (
+                            <span className="shrink-0 w-2 h-2 rounded-full bg-indigo-500 mt-1" />
+                        )}
+                    </button>
+                ))
+            )}
+        </div>
+
+        {/* Footer */}
+        {notificacoes.length > 0 && (
+            <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
+                <button
+                    onClick={() => { onNavigate('/app/rh/trocas-turno'); onClose(); }}
+                    className="w-full text-center text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                >
+                    Ver todas as trocas →
+                </button>
+            </div>
+        )}
+    </div>
+);
+
+// ── Hook: polling de notificações ───────────────────────────────
+const POLL_INTERVAL_MS = 30_000; // 30 segundos
+
+function useNotificacoes(auth) {
+    const [count,          setCount]          = useState(0);
+    const [notificacoes,   setNotificacoes]   = useState([]);
+    const [loading,        setLoading]        = useState(false);
+    const timerRef = useRef(null);
+
+    const fetchNotifs = useCallback(async (withDetails = false) => {
+        if (!auth?.num) return;
+
+        const filterPayload = {
+            num:        auth.num,
+            isChefe:    auth.isChefe  || false,
+            deps_chefe: auth.deps_chefe || [],
+        };
+
+        try {
+            if (withDetails) {
+                setLoading(true);
+                const res = await fetchPost({
+                    url:             `${API_URL}/rponto/sqlp/`,
+                    withCredentials: true,
+                    parameters:      { method: 'NotificacoesList' },
+                    filter:          filterPayload,
+                });
+                setNotificacoes(res?.rows || []);
+                setCount((res?.rows || []).length);
+            } else {
+                // Polling silencioso — só a contagem
+                const res = await fetchPost({
+                    url:             `${API_URL}/rponto/sqlp/`,
+                    withCredentials: true,
+                    parameters:      { method: 'NotificacoesCount' },
+                    filter:          filterPayload,
+                });
+                setCount(res?.count || 0);
+            }
+        } catch {
+            // falha silenciosa no polling
+        } finally {
+            setLoading(false);
+        }
+    }, [auth]);
+
+    // Polling a cada 30s (só contagem)
+    useEffect(() => {
+        if (!auth?.num) return;
+
+        fetchNotifs(false); // primeira chamada ao montar
+
+        timerRef.current = setInterval(() => {
+            fetchNotifs(false);
+        }, POLL_INTERVAL_MS);
+
+        return () => clearInterval(timerRef.current);
+    }, [auth, fetchNotifs]);
+
+    // Carregar detalhe quando o dropdown abre
+    const loadDetails = useCallback(() => {
+        fetchNotifs(true);
+    }, [fetchNotifs]);
+
+    return { count, notificacoes, loading, loadDetails, refresh: () => fetchNotifs(true) };
+}
+
+// ═══════════════════════════════════════════════════════════════
 export default () => {
     const [api, contextHolder] = notification.useNotification();
     const { auth, handleLogout } = useContext(AppContext);
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-    const location = useLocation();
+    const navigate  = useNavigate();
+    const location  = useLocation();
+
+    const [isSidebarOpen,    setIsSidebarOpen]    = useState(false);
+    const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+    const notifRef = useRef(null);
+
+    const { count, notificacoes, loading, loadDetails, refresh } = useNotificacoes(auth);
+
+    // Fechar dropdown ao clicar fora
+    useEffect(() => {
+        const handler = (e) => {
+            if (notifRef.current && !notifRef.current.contains(e.target)) {
+                setShowNotifDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
+
+    const handleBellClick = () => {
+        const next = !showNotifDropdown;
+        setShowNotifDropdown(next);
+        if (next) loadDetails(); // carrega detalhes ao abrir
+    };
 
     const openNotification = (status, placement, message, description) => {
         const config = {
@@ -41,16 +221,16 @@ export default () => {
             className: 'font-sans',
             style: { borderRadius: '12px' }
         };
-        if (status === 'error')   api.error(config);
+        if (status === 'error')        api.error(config);
         else if (status === 'success') api.success(config);
         else if (status === 'warning') api.warning(config);
-        else api.info(config);
+        else                           api.info(config);
     };
 
     const userIsRH    = isRH(auth);
     const userIsChefe = auth?.isChefe;
-    const papel = userIsRH ? 'Recursos Humanos' : userIsChefe ? 'Chefe de Departamento' : 'Colaborador';
-    const papelColor = userIsRH ? 'from-purple-500 to-purple-700' : userIsChefe ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-blue-700';
+    const papel       = userIsRH ? 'Recursos Humanos' : userIsChefe ? 'Chefe de Departamento' : 'Colaborador';
+    const papelColor  = userIsRH ? 'from-purple-500 to-purple-700' : userIsChefe ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-blue-700';
 
     const currentRoute = ROUTE_LABELS[location.pathname];
 
@@ -62,10 +242,7 @@ export default () => {
 
                 {/* ── Desktop Sidebar ── */}
                 <aside className="hidden md:flex flex-col w-[264px] bg-[#0F172A] text-white shadow-2xl z-30 shrink-0 relative">
-                    {/* Gradient accent line */}
                     <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
-
-                    {/* Logo area */}
                     <div className="h-[60px] flex items-center px-5 border-b border-white/5">
                         <div className="flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
@@ -77,8 +254,6 @@ export default () => {
                             </div>
                         </div>
                     </div>
-
-                    {/* Navigation */}
                     <div className="flex-1 overflow-hidden">
                         <MainMenu auth={auth} handleLogout={handleLogout} />
                     </div>
@@ -144,11 +319,38 @@ export default () => {
                                 <kbd className="px-1 py-0.5 bg-white rounded text-[10px] shadow-sm border border-slate-200">⌘K</kbd>
                             </div>
 
-                            {/* Notification Bell */}
-                            <button className="relative p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors">
-                                <Bell size={18} />
-                                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full ring-1 ring-white" />
-                            </button>
+                            {/* ── Bell de Notificações ── */}
+                            <div className="relative" ref={notifRef}>
+                                <button
+                                    onClick={handleBellClick}
+                                    className={`relative p-2 rounded-lg transition-colors
+                                        ${showNotifDropdown
+                                            ? 'bg-indigo-50 text-indigo-600'
+                                            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                                        }`}
+                                >
+                                    <Bell size={18} />
+                                    {/* Badge de contagem */}
+                                    {count > 0 ? (
+                                        <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center ring-2 ring-white">
+                                            {count > 9 ? '9+' : count}
+                                        </span>
+                                    ) : (
+                                        /* Ponto cinza quando sem notificações — indica que o bell está activo */
+                                        <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-slate-300 rounded-full ring-1 ring-white" />
+                                    )}
+                                </button>
+
+                                {showNotifDropdown && (
+                                    <NotificacoesDropdown
+                                        notificacoes={notificacoes}
+                                        loading={loading}
+                                        onClose={() => setShowNotifDropdown(false)}
+                                        onNavigate={(path) => navigate(path, { state: { tstamp: Date.now() }, replace: true })}
+                                        onRefresh={refresh}
+                                    />
+                                )}
+                            </div>
 
                             {/* Divider */}
                             <div className="h-7 w-px bg-slate-200 mx-1" />
