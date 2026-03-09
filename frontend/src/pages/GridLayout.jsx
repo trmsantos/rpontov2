@@ -29,14 +29,15 @@ const ROUTE_LABELS = {
     '/app/rh/registos-pessoal':           { label: 'As Minhas Picagens',             icon: '🕐' },
 };
 
-// ── Ícone por tipo de notificação ───────────────────────────────
+
 const NotifIcon = ({ tipo }) => {
     if (tipo === 'troca_pendente') return <ArrowLeftRight size={14} className="text-indigo-500 shrink-0 mt-0.5" />;
     if (tipo === 'troca_aprovar')  return <CheckSquare    size={14} className="text-amber-500  shrink-0 mt-0.5" />;
+    if (tipo === 'troca_aprovada') return <CheckSquare    size={14} className="text-green-500  shrink-0 mt-0.5" />;
     return <Bell size={14} className="text-slate-400 shrink-0 mt-0.5" />;
 };
 
-// ── Dropdown de Notificações ──────────────────────────────────���─
+
 const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRefresh }) => (
     <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden">
         {/* Header */}
@@ -109,15 +110,15 @@ const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRe
                     onClick={() => { onNavigate('/app/rh/trocas-turno'); onClose(); }}
                     className="w-full text-center text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                 >
-                    Ver todas as trocas →
+                    Ver todas as trocas 
                 </button>
             </div>
         )}
     </div>
 );
 
-// ── Hook: polling de notificações ───────────────────────────────
-const POLL_INTERVAL_MS = 30_000; // 30 segundos
+
+const POLL_INTERVAL_MS = 30_000; 
 
 function useNotificacoes(auth) {
     const [count,          setCount]          = useState(0);

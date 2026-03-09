@@ -1,9 +1,10 @@
-// Login.js
+// Login.jsx
 import React, { useState, useContext } from 'react';
 import axios from 'axios';
 import { Button, Alert, Input, Checkbox, Form, Typography, Divider, Space } from "antd";
 import { UserOutlined, LockOutlined, ClockCircleOutlined, TeamOutlined, BarChartOutlined } from '@ant-design/icons';
 import { AppContext } from './App';
+import { useNavigate } from 'react-router-dom';
 import Logo from 'assets/logo.svg';
 import jwt_decode from 'jwt-decode';
 
@@ -12,6 +13,7 @@ const { Title, Text } = Typography;
 export default () => {
     const [form] = Form.useForm();
     const { setAuth } = useContext(AppContext);
+    const navigate = useNavigate();
     const [remember, setRemember] = useState(false);
     const [loading, setLoading] = useState(false);
     const [loginError, setLoginError] = useState(false);
@@ -21,9 +23,14 @@ export default () => {
         setLoginError(false);
         try {
             localStorage.removeItem('auth');
-            const response = await axios.post('/api/token/', { username: values.username, password: values.password, remember }, { withCredentials: true });
+            const response = await axios.post('/api/token/', {
+                username: values.username,
+                password: values.password,
+                remember
+            }, { withCredentials: true });
+
             const decodedToken = jwt_decode(response.data.access);
-           const _auth = {
+            const _auth = {
                 access_token:  response.data.access,
                 refresh_token: response.data.refresh,
                 username:      values.username,
@@ -36,13 +43,18 @@ export default () => {
                 isRH:          decodedToken.isRH,
                 isChefe:       decodedToken.isChefe    || false,
                 deps_chefe:    decodedToken.deps_chefe || [],
-                dep:           decodedToken.dep        || '',   
-                tp_hor:        decodedToken.tp_hor     || '',    
+                dep:           decodedToken.dep        || '',
+                tp_hor:        decodedToken.tp_hor     || '',
                 items:         decodedToken.items
             };
+
             localStorage.setItem('auth', JSON.stringify(_auth));
+            axios.defaults.headers.common.Authorization = `Bearer ${_auth.access_token}`;
             setAuth({ isAuthenticated: true, ..._auth });
-            window.location.href = '/app';
+
+            // ← usar navigate em vez de window.location.href
+            // o PublicRoute detecta isAuthenticated=true e redireciona para /app/rh/ferias
+            navigate('/app/rh/ferias', { replace: true });
         } catch (e) {
             setLoginError(true);
         } finally {
@@ -50,6 +62,7 @@ export default () => {
         }
     };
 
+    // ... resto do JSX inalterado (o return com o form)
     return (
         <div style={{
             minHeight: '100vh',
@@ -68,7 +81,7 @@ export default () => {
                 overflow: 'hidden',
                 boxShadow: '0 25px 50px rgba(0,0,0,0.5)'
             }}>
-                {/* Left branding panel - hidden on small screens */}
+                {/* Painel esquerdo de branding */}
                 <div className="login-branding-panel" style={{
                     flex: 1,
                     background: 'linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)',
@@ -82,27 +95,28 @@ export default () => {
                     color: '#fff'
                 }}>
                     <Logo style={{ height: '80px', marginBottom: '32px', width: '100%', filter: 'brightness(0) invert(1)' }} />
-                    <Title level={2} style={{ color: '#fff', textAlign: 'center', marginBottom: '8px' }}>
-                        Sistema de Gestão de RH 
-                    </Title>
-                    <Divider style={{ borderColor: 'rgba(255,255,255,0.2)', margin: '0 0 32px 0' }} />
+                    <Title level={2} style={{ color: '#fff', margin: 0 }}>Portal RH</Title>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', marginTop: 8, textAlign: 'center' }}>
+                        Sistema de Gestão de Recursos Humanos
+                    </Text>
+                    <Divider style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '32px 0' }} />
                     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255,255,255,0.85)' }}>
-                            <ClockCircleOutlined style={{ fontSize: '20px', color: '#4fc3f7' }} />
-                            <Text style={{ color: 'rgba(255,255,255,0.85)' }}>Registo de ponto em tempo real</Text>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'rgba(255,255,255,0.7)' }}>
+                            <ClockCircleOutlined style={{ fontSize: 18 }} />
+                            <Text style={{ color: 'rgba(255,255,255,0.7)' }}>Registo de Picagens</Text>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255,255,255,0.85)' }}>
-                            <TeamOutlined style={{ fontSize: '20px', color: '#4fc3f7' }} />
-                            <Text style={{ color: 'rgba(255,255,255,0.85)' }}>Gestão de equipas e turnos</Text>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'rgba(255,255,255,0.7)' }}>
+                            <TeamOutlined style={{ fontSize: 18 }} />
+                            <Text style={{ color: 'rgba(255,255,255,0.7)' }}>Gestão de Colaboradores</Text>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255,255,255,0.85)' }}>
-                            <BarChartOutlined style={{ fontSize: '20px', color: '#4fc3f7' }} />
-                            <Text style={{ color: 'rgba(255,255,255,0.85)' }}>Relatórios e análises detalhadas</Text>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'rgba(255,255,255,0.7)' }}>
+                            <BarChartOutlined style={{ fontSize: 18 }} />
+                            <Text style={{ color: 'rgba(255,255,255,0.7)' }}>Processamento Salarial</Text>
                         </div>
                     </Space>
                 </div>
 
-                {/* Right form panel */}
+                {/* Painel direito do formulário */}
                 <div style={{
                     flex: 1,
                     background: '#fff',
@@ -111,82 +125,71 @@ export default () => {
                     flexDirection: 'column',
                     justifyContent: 'center'
                 }}>
-                    <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-                        <Logo style={{ height: '48px', marginBottom: '16px', width: '100%' }} />
-                        <Title level={3} style={{ margin: 0, color: '#1e3a5f' }}>Bem-vindo</Title>
-                        <Text type="secondary">Introduza os seus dados para aceder</Text>
-                    </div>
+                    <Title level={3} style={{ marginBottom: 8 }}>Bem-vindo</Title>
+                    <Text type="secondary" style={{ marginBottom: 32, display: 'block' }}>
+                        Introduza as suas credenciais para aceder
+                    </Text>
 
                     {loginError && (
                         <Alert
-                            message={<span>Ocorreu um erro ao efetuar o login!<br />Por favor, verifique se o <b>utilizador e/ou password</b> estão corretos.</span>}
+                            message="Credenciais inválidas"
+                            description="Verifique o utilizador e a palavra-passe."
                             type="error"
                             showIcon
                             closable
                             onClose={() => setLoginError(false)}
-                            style={{ marginBottom: '20px', borderRadius: '8px' }}
+                            style={{ marginBottom: 24 }}
                         />
                     )}
 
-                    <Form
-                        form={form}
-                        layout="vertical"
-                        onFinish={handleSubmit}
-                        size="large"
-                        requiredMark={false}
-                    >
+                    <Form form={form} layout="vertical" onFinish={handleSubmit}>
                         <Form.Item
                             name="username"
                             label="Utilizador"
-                            rules={[{ required: true, message: 'Por favor introduza o utilizador.' }]}
+                            rules={[{ required: true, message: 'Introduza o utilizador' }]}
                         >
                             <Input
                                 prefix={<UserOutlined style={{ color: '#bfbfbf' }} />}
-                                placeholder="Utilizador"
-                                autoFocus
+                                placeholder="Nome de utilizador"
+                                size="large"
                                 autoComplete="username"
                             />
                         </Form.Item>
 
                         <Form.Item
                             name="password"
-                            label="Password"
-                            rules={[{ required: true, message: 'Por favor introduza a password.' }]}
+                            label="Palavra-passe"
+                            rules={[{ required: true, message: 'Introduza a palavra-passe' }]}
                         >
                             <Input.Password
                                 prefix={<LockOutlined style={{ color: '#bfbfbf' }} />}
-                                placeholder="Password"
+                                placeholder="Palavra-passe"
+                                size="large"
                                 autoComplete="current-password"
                             />
                         </Form.Item>
 
-                        <Form.Item style={{ marginBottom: '20px' }}>
-                            <Checkbox checked={remember} onChange={() => setRemember(!remember)}>
-                                Lembrar-me neste dispositivo
+                        <Form.Item>
+                            <Checkbox
+                                checked={remember}
+                                onChange={e => setRemember(e.target.checked)}
+                            >
+                                Manter sessão iniciada
                             </Checkbox>
                         </Form.Item>
 
-                        <Form.Item style={{ marginBottom: '8px' }}>
+                        <Form.Item style={{ marginBottom: 0 }}>
                             <Button
-                                block
                                 type="primary"
                                 htmlType="submit"
+                                size="large"
                                 loading={loading}
-                                style={{
-                                    height: '48px',
-                                    borderRadius: '8px',
-                                    background: 'linear-gradient(135deg, #1e3a5f, #2d6a9f)',
-                                    border: 'none',
-                                    fontSize: '16px',
-                                    fontWeight: 600
-                                }}
+                                style={{ width: '100%', height: 48, borderRadius: 8 }}
                             >
                                 Entrar
                             </Button>
                         </Form.Item>
                     </Form>
-
-                    <Divider style={{ margin: '24px 0 16px' }} />
                 </div>
             </div>
         </div>

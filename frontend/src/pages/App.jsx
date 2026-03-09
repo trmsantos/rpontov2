@@ -28,7 +28,7 @@ const GestaoChefes          = lazy(() => import('./GestaoChefes'));
 const RegistosRHChefe       = lazy(() => import('./RegistosRHChefe'));
 const ColaboradoresDepartamento = lazy(() => import('./ColaboradoresDepartamento'));
 const RegistosRHPessoal     = lazy(() => import('./RegistosRHPessoal'));
-const TrocasTurno           = lazy(() => import('./TrocasTurno')); // ← NOVO
+const TrocasTurno           = lazy(() => import('./TrocasTurno'));
 
 export const MediaContext = React.createContext({});
 export const SocketContext = React.createContext({});
@@ -43,58 +43,57 @@ const PublicRoute = ({ children }) => {
         : children;
 };
 
-/* ── Guarda de rota: só DPROD ─────────────────────────────────
-   Regra:
-   - Colaborador normal   → auth.dep === 'DPROD'
-   - Chefe de dep         → auth.deps_chefe inclui 'DPROD'
-   - RH                   → NÃO tem acesso (não é de produção)
-   Ajusta a regra abaixo se o RH também dever ver.
-─────────────────────────────────────────────────────────────── */
+/* ── Guarda de rota privada: redireciona não-autenticados para login ── */
+const PrivateRoute = ({ children }) => {
+    const { auth, authLoading } = useContext(AppContext);
+    if (authLoading) return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+            <Spin size="large" />
+        </div>
+    );
+    return auth.isAuthenticated
+        ? children
+        : <Navigate to="/app/login" replace />;
+};
+
+/* ── Guarda de rota: só DPROD ���─ */
 const ProtectedDPROD = ({ children }) => {
     const { auth, authLoading } = useContext(AppContext);
-
     if (authLoading) return <Spin />;
-
     const pertenceDPROD =
         auth?.dep === 'DPROD' ||
         (auth?.deps_chefe || []).includes('DPROD');
-
     return pertenceDPROD
         ? children
         : <Navigate to="/app/rh/ferias" replace />;
 };
 
-/* ── Layout principal ─────────────────────────────── */
-const MainLayout = () => {
-    const { auth, authLoading } = useContext(AppContext);
-
-    if (authLoading) return (
-        <Spin size="large" style={{
-            display: 'flex', justifyContent: 'center',
-            alignItems: 'center', height: '100vh'
-        }} />
-    );
-
-    return auth.isAuthenticated
-        ? <GridLayout />
-        : <Suspense fallback={<Spin />}><Login /></Suspense>;
-};
-
 /* ── Rotas ────────────────────────────────────────── */
 const RenderRouter = () => {
     const element = useRoutes([
+        /* ── Rota pública de login (sem layout) ── */
+        {
+            path: '/app/login',
+            element: (
+                <PublicRoute>
+                    <Suspense fallback={<Spin />}><Login /></Suspense>
+                </PublicRoute>
+            )
+        },
+
+        /* ── Todas as rotas privadas com GridLayout ── */
         {
             path: '/app',
-            element: <MainLayout />,
+            element: (
+                <PrivateRoute>
+                    <GridLayout />
+                </PrivateRoute>
+            ),
             children: [
-                { path: "login",
-                  element: (
-                      <PublicRoute>
-                          <Suspense fallback={<Spin />}><Login /></Suspense>
-                      </PublicRoute>
-                  ) },
+                /* Redirect default: /app → /app/rh/ferias */
+                { index: true, element: <Navigate to="/app/rh/ferias" replace /> },
 
-                /* ── RH ────────────────────────────────────────── */
+                /* ── RH ── */
                 { path: "rh/registos",
                   element: <Suspense fallback={<Spin />}><RegistosRH key="lst-rp-rh" /></Suspense> },
                 { path: "rh/registosv3",
@@ -108,13 +107,13 @@ const RenderRouter = () => {
                 { path: "rh/justificacoes/rh",
                   element: <Suspense fallback={<Spin />}><JustificacoesRH /></Suspense> },
 
-                /* ── Área Pessoal ───────────────────────────────── */
+                /* ── Área Pessoal ── */
                 { path: "rh/registospessoal",
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe key="picagens-pessoal" /></Suspense> },
                 { path: "rh/planpessoal",
                   element: <Suspense fallback={<Spin />}><Turnos key="plano-pessoal" /></Suspense> },
 
-                /* ── Comum ──────────────────────────────────────── */
+                /* ── Comum ── */
                 { path: "rh/turnos",
                   element: <Suspense fallback={<Spin />}><Turnos /></Suspense> },
                 { path: "rh/ferias",
@@ -122,7 +121,7 @@ const RenderRouter = () => {
                 { path: "rh/justificacoes/pessoal",
                   element: <Suspense fallback={<Spin />}><JustificacoesPessoal /></Suspense> },
 
-                /* ── RH + Chefe ─────────────────────────────────── */
+                /* ── RH + Chefe ── */
                 { path: "rh/gestao-ferias",
                   element: <Suspense fallback={<Spin />}><GestaoFerias /></Suspense> },
                 { path: "rh/justificacoes/chefe",
@@ -132,7 +131,7 @@ const RenderRouter = () => {
                 { path: "rh/colaboradores-departamento",
                   element: <Suspense fallback={<Spin />}><ColaboradoresDepartamento /></Suspense> },
 
-                /* ── DPROD — Trocas de Turno ────────────────────── */
+                /* ── DPROD — Trocas de Turno ── */
                 { path: "rh/trocas-turno",
                   element: (
                       <ProtectedDPROD>
@@ -143,13 +142,13 @@ const RenderRouter = () => {
                   )
                 },
 
-                /* ── Outras ─────────────────────────────────────── */
+                /* ── Outras ── */
                 { path: "horario",
                   element: <Suspense fallback={<Spin />}><MeuHorario /></Suspense> },
                 { path: "gestao-chefes",
                   element: <Suspense fallback={<Spin />}><GestaoChefes /></Suspense> },
 
-                /* ── Retrocompatibilidade ───────────────────────── */
+                /* ── Retrocompatibilidade ── */
                 { path: "rh/registos-chefe",
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe /></Suspense> },
                 { path: "rh/registos-pessoal",
@@ -163,7 +162,7 @@ const RenderRouter = () => {
     return element;
 };
 
-/* ── App root ─────────────────────────────────────── */
+/* ── App root ── */
 const App = () => {
     const submitting                    = useSubmitting(true);
     const [auth, setAuth]               = useState({ isAuthenticated: false });
@@ -177,7 +176,10 @@ const App = () => {
             const authNormalizado = {
                 isAuthenticated: true,
                 ..._auth,
-                dep: _auth.dep || '',
+                dep:       _auth.dep       || '',
+                tp_hor:    _auth.tp_hor    || '',
+                isChefe:   _auth.isChefe   || false,
+                deps_chefe: _auth.deps_chefe || [],
             };
 
             setAuth(authNormalizado);

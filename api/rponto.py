@@ -4234,197 +4234,6 @@ def ChefesDistinctList(request, format=None):
         return Response({"status": "error", "title": str(e)})
 
 
-# ================================================================
-# PROCESSAMENTO SALARIAL — RESUMO
-# 1 linha por colaborador com totais do mês
-# ================================================================
-def ProcessamentoSalarialResumo(request, format=None):
-    try:
-        f        = request.data.get('filter', {})
-        fdep     = f.get('fdep')
-        fnum     = f.get('fnum')
-        fdata    = f.get('fdata')  # array [">=YYYY-MM-DD", "<=YYYY-MM-DD"]
-
-        # ── Parse do intervalo de datas ───────────────────────
-        if not fdata or len(fdata) < 2:
-            return Response({"status": "error", "title": "Intervalo de datas obrigatório"})
-
-        d_ini_str = str(fdata[0]).replace(">=", "").strip()[:10]
-        d_fim_str = str(fdata[1]).replace("<=", "").strip()[:10]
-
-        try:
-            d_ini = datetime.strptime(d_ini_str, '%Y-%m-%d').date()
-            d_fim = datetime.strptime(d_fim_str, '%Y-%m-%d').date()
-        except ValueError:
-            return Response({"status": "error", "title": "Formato de data inválido"})
-
-        if d_ini > d_fim:
-            return Response({"status": "error", "title": "Data início não pode ser superior à data fim"})
-
-        # Fim exclusivo para a query SQL
-        d_fim_exc_str = (d_fim + timedelta(days=1)).strftime('%Y-%m-%d')
-
-        # Dias úteis do período (Seg–Sex)
-        dias_uteis = sum(
-            1 for i in range((d_fim - d_ini).days + 1)
-            if (d_ini + timedelta(days=i)).weekday() < 5
-        )
-
-        # ── Query ────────────────────���────────────────────────
-        where  = ["TR.dts >= %s", "TR.dts < %s"]
-        params = [d_ini_str, d_fim_exc_str]
-
-        if fdep:
-            where.append("RTRIM(LTRIM(TR.dep)) = %s")
-            params.append(fdep.strip())
-        if fnum:
-            num_fmt = fnum.strip()
-            if not num_fmt.startswith('F'):
-                num_fmt = f"F{num_fmt.zfill(5)}"
-            where.append("TR.num = %s")
-            params.append(num_fmt)
-
-        with connections[connMssqlName].cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT
-                    TR.num,
-                    RTRIM(LTRIM(ISNULL(TR.dep,'')))    AS dep,
-                    RTRIM(LTRIM(ISNULL(TR.tp_hor,''))) AS tp_hor,
-                    CONVERT(VARCHAR(10), TR.dts, 23)   AS dts,
-                    ISNULL(TR.nt, 0)                   AS nt,
-                    TR.ss_01, ISNULL(TR.ty_01,'') AS ty_01,
-                    TR.ss_02, ISNULL(TR.ty_02,'') AS ty_02,
-                    TR.ss_03, ISNULL(TR.ty_03,'') AS ty_03,
-                    TR.ss_04, ISNULL(TR.ty_04,'') AS ty_04,
-                    TR.ss_05, ISNULL(TR.ty_05,'') AS ty_05,
-                    TR.ss_06, ISNULL(TR.ty_06,'') AS ty_06,
-                    TR.ss_07, ISNULL(TR.ty_07,'') AS ty_07,
-                    TR.ss_08, ISNULL(TR.ty_08,'') AS ty_08
-                FROM rponto.dbo.time_registration TR
-                WHERE {' AND '.join(where)}
-                ORDER BY TR.num, TR.dts
-                """,
-                params
-            )
-            cols     = [c[0] for c in cursor.description]
-            registos = [dict(zip(cols, r)) for r in cursor.fetchall()]
-
-        if not registos:
-            return Response({
-                "rows": [], "total": 0,
-                "periodo": {
-                    "inicio":     d_ini_str,
-                    "fim":        d_fim_str,
-                    "dias_uteis": dias_uteis
-                },
-                "status": "success"
-            })
-
-        # ── Nomes via SAGE ────────────────────────────────────
-        nums_unicos = list({r['num'] for r in registos if r.get('num')})
-        nomes_dict  = _get_nomes_colaboradores(nums_unicos)
-
-        # ── Agrupar por colaborador ───────────────────────────
-        from collections import defaultdict
-        por_colab = defaultdict(list)
-        for reg in registos:
-            por_colab[reg['num']].append(reg)
-
-        resultado = []
-
-        for num, regs in por_colab.items():
-            info_sage = nomes_dict.get(num, {})
-
-            total_mins       = 0
-            total_mins_not   = 0
-            dias_com_registo = 0
-            dias_com_erro    = 0
-            dias_fds         = 0
-            dias_pausa       = 0
-            alertas          = []
-
-            for reg in regs:
-                dts_str = reg.get('dts', '')
-                try:
-                    dts_date = datetime.strptime(dts_str[:10], '%Y-%m-%d').date()
-                except Exception:
-                    continue
-
-                try:
-                    calc = _calcular_horas_dia(reg)
-                except Exception as e_calc:
-                    print(f"[ERROR] _calcular_horas_dia {num} {dts_str}: {e_calc}")
-                    traceback.print_exc()
-                    calc = {
-                        'minutos': 0, 'horas_fmt': '00:00',
-                        'n_picagens': 0, 'tem_erro': True,
-                        'pausa_almoco': False, 'minutos_pausa': 0,
-                        'pares': [], 'picagens_raw': []
-                    }
-
-                try:
-                    mins_not = _calcular_minutos_noturnos(
-                        calc.get('pares', []), dts_str
-                    )
-                except Exception:
-                    mins_not = 0
-
-                is_fds = dts_date.weekday() >= 5
-
-                if is_fds:
-                    dias_fds += 1
-                if calc['n_picagens'] > 0:
-                    dias_com_registo += 1
-                if calc['tem_erro']:
-                    dias_com_erro += 1
-                    alertas.append({
-                        'tipo': 'erro_picagem',
-                        'data': dts_str[:10],
-                        'msg':  f"Picagens inconsistentes ({calc['n_picagens']} picagens) em {dts_str[:10]}"
-                    })
-                if calc['pausa_almoco']:
-                    dias_pausa += 1
-
-                total_mins     += calc['minutos']
-                total_mins_not += mins_not
-
-            resultado.append({
-                'num':    num,
-                'nome':   info_sage.get('nome', ''),
-                'dep':    regs[0].get('dep', ''),
-                'tp_hor': regs[0].get('tp_hor', ''),
-                'total_mins':         total_mins,
-                'total_horas_fmt':    f"{total_mins // 60:02d}:{total_mins % 60:02d}",
-                'dias_uteis':         dias_uteis,
-                'dias_com_registo':   dias_com_registo,
-                'dias_com_erro':      dias_com_erro,
-                'dias_fds':           dias_fds,
-                'dias_pausa_almoco':  dias_pausa,
-                'mins_noturnos':      total_mins_not,
-                'horas_noturnas_fmt': f"{total_mins_not // 60:02d}:{total_mins_not % 60:02d}",
-                'n_alertas': len(alertas),
-                'alertas':   alertas,
-            })
-
-        resultado.sort(key=lambda x: (x.get('dep', ''), x.get('nome', '')))
-
-        return Response({
-            "rows":   resultado,
-            "total":  len(resultado),
-            "periodo": {
-                "inicio":     d_ini_str,
-                "fim":        d_fim_str,
-                "dias_uteis": dias_uteis
-            },
-            "status": "success"
-        })
-
-    except Exception as e:
-        traceback.print_exc()
-        return Response({"status": "error", "title": str(e)})
-
-
 def ProcessamentoSalarialDetalhe(request, format=None):
     try:
         f     = request.data.get('filter', {})
@@ -4486,6 +4295,30 @@ def ProcessamentoSalarialDetalhe(request, format=None):
         dep    = registos[0].get('dep', '')    if registos else ''
         tp_hor = registos[0].get('tp_hor', '') if registos else ''
 
+        # ── Férias aprovadas no período ───────────────────────
+        ferias_dias = set()
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    CONVERT(VARCHAR(10), data_ini, 23) AS data_ini,
+                    CONVERT(VARCHAR(10), data_fim, 23) AS data_fim
+                FROM rponto.dbo.ferias_pedidos
+                WHERE num    = %s
+                  AND estado = 'aprovado_rh'
+                  AND data_fim  >= %s
+                  AND data_ini  <= %s
+            """, [num, d_ini_str, d_fim_str])
+            for row in cursor.fetchall():
+                try:
+                    fi = datetime.strptime(row[0][:10], '%Y-%m-%d').date()
+                    ff = datetime.strptime(row[1][:10], '%Y-%m-%d').date()
+                    curr_f = fi
+                    while curr_f <= ff:
+                        ferias_dias.add(curr_f.isoformat())
+                        curr_f += timedelta(days=1)
+                except Exception:
+                    pass
+
         # ── Calendário completo do período ────────────────────
         nomes_dia = ['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo']
         abrev_dia = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom']
@@ -4496,12 +4329,14 @@ def ProcessamentoSalarialDetalhe(request, format=None):
         dias_com_reg   = 0
         dias_com_erro  = 0
         dias_pausa     = 0
+        dias_ferias    = 0
 
         curr = d_ini
         while curr <= d_fim:
             data_str = curr.strftime('%Y-%m-%d')
             reg      = regs_por_data.get(data_str)
             is_fds   = curr.weekday() >= 5
+            is_ferias_dia = data_str in ferias_dias
 
             if reg:
                 calc     = _calcular_horas_dia(reg)
@@ -4518,12 +4353,23 @@ def ProcessamentoSalarialDetalhe(request, format=None):
                 if calc['pausa_almoco']:
                     dias_pausa += 1
 
+                # Determinar tipo do dia
+                if is_ferias_dia:
+                    tipo_dia = 'ferias'
+                    dias_ferias += 1
+                elif is_fds:
+                    tipo_dia = 'fds'
+                else:
+                    tipo_dia = 'normal'
+
                 dias.append({
                     'data':             data_str,
                     'dia':              curr.day,
                     'dia_semana':       nomes_dia[curr.weekday()],
                     'dia_semana_abrev': abrev_dia[curr.weekday()],
                     'is_fds':           is_fds,
+                    'is_ferias':        is_ferias_dia,
+                    'tipo_dia':         tipo_dia,
                     'tem_registo':      calc['n_picagens'] > 0,
                     'n_picagens':       calc['n_picagens'],
                     'mins_trabalhados': calc['minutos'],
@@ -4537,12 +4383,23 @@ def ProcessamentoSalarialDetalhe(request, format=None):
                     'tp_hor':           reg.get('tp_hor', ''),
                 })
             else:
+                # Sem picagem — verificar se é férias
+                if is_ferias_dia:
+                    tipo_dia = 'ferias'
+                    dias_ferias += 1
+                elif is_fds:
+                    tipo_dia = 'fds'
+                else:
+                    tipo_dia = 'ausencia'
+
                 dias.append({
                     'data':             data_str,
                     'dia':              curr.day,
                     'dia_semana':       nomes_dia[curr.weekday()],
                     'dia_semana_abrev': abrev_dia[curr.weekday()],
                     'is_fds':           is_fds,
+                    'is_ferias':        is_ferias_dia,
+                    'tipo_dia':         tipo_dia,
                     'tem_registo':      False,
                     'n_picagens':       0,
                     'mins_trabalhados': 0,
@@ -4580,8 +4437,189 @@ def ProcessamentoSalarialDetalhe(request, format=None):
                 "dias_com_registo":  dias_com_reg,
                 "dias_com_erro":     dias_com_erro,
                 "dias_pausa_almoco": dias_pausa,
+                "dias_ferias":       dias_ferias,
             },
             "dias":   dias,
+            "status": "success"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+# ================================================================
+# ProcessamentoSalarialResumo — versão corrigida
+# Adiciona dias_ferias por colaborador
+# ================================================================
+def ProcessamentoSalarialResumo(request, format=None):
+    try:
+        f        = request.data.get('filter', {})
+        fdep     = f.get('fdep')
+        fnum     = f.get('fnum')
+        fdata    = f.get('fdata')
+
+        if not fdata or len(fdata) < 2:
+            return Response({"status": "error", "title": "Intervalo de datas obrigatório"})
+
+        d_ini_str = str(fdata[0]).replace(">=", "").strip()[:10]
+        d_fim_str = str(fdata[1]).replace("<=", "").strip()[:10]
+
+        try:
+            d_ini = datetime.strptime(d_ini_str, '%Y-%m-%d').date()
+            d_fim = datetime.strptime(d_fim_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"status": "error", "title": "Formato de data inválido"})
+
+        if d_ini > d_fim:
+            return Response({"status": "error", "title": "Data início não pode ser superior à data fim"})
+
+        d_fim_exc_str = (d_fim + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        dias_uteis = sum(
+            1 for i in range((d_fim - d_ini).days + 1)
+            if (d_ini + timedelta(days=i)).weekday() < 5
+        )
+
+        where  = ["TR.dts >= %s", "TR.dts < %s"]
+        params = [d_ini_str, d_fim_exc_str]
+
+        if fdep:
+            where.append("RTRIM(LTRIM(TR.dep)) = %s")
+            params.append(fdep.strip())
+        if fnum:
+            num_fmt = fnum.strip()
+            if not num_fmt.startswith('F'):
+                num_fmt = f"F{num_fmt.zfill(5)}"
+            where.append("TR.num = %s")
+            params.append(num_fmt)
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(f"""
+                SELECT
+                    TR.num,
+                    RTRIM(LTRIM(ISNULL(TR.dep,'')))    AS dep,
+                    RTRIM(LTRIM(ISNULL(TR.tp_hor,''))) AS tp_hor,
+                    CONVERT(VARCHAR(10), TR.dts, 23)   AS dts,
+                    ISNULL(TR.nt, 0)                   AS nt,
+                    TR.ss_01, ISNULL(TR.ty_01,'') AS ty_01,
+                    TR.ss_02, ISNULL(TR.ty_02,'') AS ty_02,
+                    TR.ss_03, ISNULL(TR.ty_03,'') AS ty_03,
+                    TR.ss_04, ISNULL(TR.ty_04,'') AS ty_04,
+                    TR.ss_05, ISNULL(TR.ty_05,'') AS ty_05,
+                    TR.ss_06, ISNULL(TR.ty_06,'') AS ty_06,
+                    TR.ss_07, ISNULL(TR.ty_07,'') AS ty_07,
+                    TR.ss_08, ISNULL(TR.ty_08,'') AS ty_08
+                FROM rponto.dbo.time_registration TR
+                WHERE {' AND '.join(where)}
+                ORDER BY TR.num, TR.dts
+            """, params)
+            cols     = [c[0] for c in cursor.description]
+            registos = [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+        if not registos:
+            return Response({
+                "rows": [], "total": 0,
+                "periodo": {"inicio": d_ini_str, "fim": d_fim_str, "dias_uteis": dias_uteis},
+                "status": "success"
+            })
+
+        nums_unicos = list({r['num'] for r in registos if r.get('num')})
+        nomes_dict  = _get_nomes_colaboradores(nums_unicos)
+
+        # Pré-carregar férias de todos os colaboradores de uma vez
+        # (1 query por colaborador — aceitável; alternativa seria 1 query com IN)
+        ferias_por_num = {}
+        for num_c in nums_unicos:
+            ferias_por_num[num_c] = _get_ferias_aprovadas_set(
+                num_c, d_ini_str, d_fim_str
+            )
+
+        from collections import defaultdict
+        por_colab = defaultdict(list)
+        for reg in registos:
+            por_colab[reg['num']].append(reg)
+
+        resultado = []
+
+        for num_c, regs in por_colab.items():
+            info_sage   = nomes_dict.get(num_c, {})
+            ferias_set  = ferias_por_num.get(num_c, set())
+
+            total_mins       = 0
+            dias_com_registo = 0
+            dias_com_erro    = 0
+            dias_fds         = 0
+            dias_pausa       = 0
+            dias_ferias      = 0
+            alertas          = []
+
+            # Conjunto de datas com registo
+            datas_com_reg = set()
+            for reg in regs:
+                dts_str = reg.get('dts', '')
+                try:
+                    dts_date = datetime.strptime(dts_str[:10], '%Y-%m-%d').date()
+                except Exception:
+                    continue
+
+                try:
+                    calc = _calcular_horas_dia(reg)
+                except Exception:
+                    calc = {'minutos': 0, 'horas_fmt': '00:00', 'n_picagens': 0,
+                            'tem_erro': True, 'pausa_almoco': False,
+                            'minutos_pausa': 0, 'pares': [], 'picagens_raw': []}
+
+                is_fds    = dts_date.weekday() >= 5
+                is_ferias = dts_str in ferias_set
+
+                if is_fds:
+                    dias_fds += 1
+                if calc['n_picagens'] > 0:
+                    dias_com_registo += 1
+                    datas_com_reg.add(dts_str)
+                if calc['tem_erro']:
+                    dias_com_erro += 1
+                    alertas.append({
+                        'tipo': 'erro_picagem',
+                        'data': dts_str[:10],
+                        'msg':  f"Picagens inconsistentes ({calc['n_picagens']}) em {dts_str[:10]}"
+                    })
+                if calc['pausa_almoco']:
+                    dias_pausa += 1
+                if is_ferias and not is_fds:
+                    dias_ferias += 1
+
+                total_mins += calc['minutos']
+
+            # Dias de férias sem picagem (contam como férias, não como falta)
+            for data_f in ferias_set:
+                if data_f not in datas_com_reg:
+                    dias_ferias += 1
+
+            resultado.append({
+                'num':    num_c,
+                'nome':   info_sage.get('nome', ''),
+                'dep':    regs[0].get('dep', ''),
+                'tp_hor': regs[0].get('tp_hor', ''),
+                'total_mins':        total_mins,
+                'total_horas_fmt':   f"{total_mins // 60:02d}:{total_mins % 60:02d}",
+                'dias_uteis':        dias_uteis,
+                'dias_com_registo':  dias_com_registo,
+                'dias_com_erro':     dias_com_erro,
+                'dias_fds':          dias_fds,
+                'dias_pausa_almoco': dias_pausa,
+                'dias_ferias':       dias_ferias,
+                'n_alertas':         len(alertas),
+                'alertas':           alertas,
+            })
+
+        resultado.sort(key=lambda x: (x.get('dep', ''), x.get('nome', '')))
+
+        return Response({
+            "rows":   resultado,
+            "total":  len(resultado),
+            "periodo": {"inicio": d_ini_str, "fim": d_fim_str, "dias_uteis": dias_uteis},
             "status": "success"
         })
 
@@ -5511,6 +5549,55 @@ def ColaboradoresPorHorario(request, format=None):
         traceback.print_exc()
         return Response({"status": "error", "title": str(e)})
 
+def _get_ferias_aprovadas_set(num, data_inicio_str, data_fim_str):
+    """
+    Devolve um set de strings 'YYYY-MM-DD' com todos os dias úteis
+    de férias aprovadas pelo RH para o colaborador no intervalo dado.
+    """
+    ferias_set = set()
+    try:
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT data_ini, data_fim
+                FROM rponto.dbo.ferias_pedidos
+                WHERE num    = %s
+                  AND estado = 'aprovado_rh'
+                  AND data_fim >= %s
+                  AND data_ini <= %s
+            """, [num, data_inicio_str, data_fim_str])
+            for row in cursor.fetchall():
+                d_ini_f = row[0] if isinstance(row[0], date) \
+                          else datetime.strptime(str(row[0])[:10], '%Y-%m-%d').date()
+                d_fim_f = row[1] if isinstance(row[1], date) \
+                          else datetime.strptime(str(row[1])[:10], '%Y-%m-%d').date()
+                curr_f = d_ini_f
+                while curr_f <= d_fim_f:
+                    if curr_f.weekday() < 5:          # só dias úteis
+                        ferias_set.add(curr_f.isoformat())
+                    curr_f += timedelta(days=1)
+    except Exception as e:
+        print(f"[WARN] _get_ferias_aprovadas_set: {e}")
+    return ferias_set
+
+
+DEP_PARA_ESQUEMA = {
+    'DPROD': 'Laboracao_Continua',
+    'DARM':  'Armazem',
+    'DAF':   'Armazem',
+    'DARQ':  'Armazem',
+    # acrescentar outros conforme os resultados da query debug_08
+}
+ESQUEMA_DEFAULT = 'Laboracao_Continua'   # fallback se dep não mapeado
+EQUIPAS_ROTATIVAS = ('A', 'B', 'C', 'D', 'E')
+
+
+def _dep_to_esquema(dep):
+    """Converte um dep no seu esquema_tipo no ciclo_laboracao."""
+    if not dep:
+        return ESQUEMA_DEFAULT
+    return DEP_PARA_ESQUEMA.get(dep.strip().upper(), ESQUEMA_DEFAULT)
+
+
 def GetTurnosColaborador(request, format=None):
     try:
         parameters  = request.data.get('parameters', {})
@@ -5548,9 +5635,9 @@ def GetTurnosColaborador(request, format=None):
                         RTRIM(LTRIM(tp_hor)) AS tp_hor,
                         RTRIM(LTRIM(dep))    AS dep
                     FROM rponto.dbo.time_registration
-                    WHERE num = %s
-                      AND tp_hor IS NOT NULL
-                      AND tp_hor != ''
+                    WHERE num    = %s
+                      AND tp_hor IS NOT NULL AND tp_hor != ''
+                      AND dep    IS NOT NULL AND dep    != ''
                     ORDER BY dts DESC
                 """, [num_auth])
                 row = cursor.fetchone()
@@ -5561,143 +5648,224 @@ def GetTurnosColaborador(request, format=None):
         print(f"[GetTurnos] num={num_auth} tp_hor={tp_hor_auth} dep={dep_auth} "
               f"isRH={is_rh} isChefe={is_chefe} deps_chefe={deps_chefe}")
 
-        # ════════════════════��═════════════════════════════════════
-        # FÉRIAS APROVADAS — só para a vista pessoal do colaborador
+        # ══════════════════════════════════════════════════════════
+        # FÉRIAS APROVADAS — vista pessoal
         # ══════════════════════════════════════════════════════════
         ferias_colab = set()
-
         if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute("""
-                    SELECT data_ini, data_fim
+                    SELECT
+                        CONVERT(VARCHAR(10), data_ini, 23),
+                        CONVERT(VARCHAR(10), data_fim, 23)
                     FROM rponto.dbo.ferias_pedidos
                     WHERE num    = %s
                       AND estado = 'aprovado_rh'
-                      AND data_fim   >= %s
-                      AND data_ini   <= %s
+                      AND data_fim  >= %s
+                      AND data_ini  <= %s
                 """, [num_auth, data_inicio_str, data_fim_str])
                 for row in cursor.fetchall():
-                    d_ini_f = row[0] if isinstance(row[0], date) else datetime.strptime(str(row[0])[:10], '%Y-%m-%d').date()
-                    d_fim_f = row[1] if isinstance(row[1], date) else datetime.strptime(str(row[1])[:10], '%Y-%m-%d').date()
-                    curr_f  = d_ini_f
-                    while curr_f <= d_fim_f:
-                        ferias_colab.add(curr_f.isoformat())
-                        curr_f += timedelta(days=1)
+                    try:
+                        fi = datetime.strptime(row[0][:10], '%Y-%m-%d').date()
+                        ff = datetime.strptime(row[1][:10], '%Y-%m-%d').date()
+                        c  = fi
+                        while c <= ff:
+                            ferias_colab.add(c.isoformat())
+                            c += timedelta(days=1)
+                    except Exception:
+                        pass
 
         # ══════════════════════════════════════════════════════════
-        # TROCAS APROVADAS — só para a vista pessoal do colaborador
+        # TROCAS APROVADAS — vista pessoal
         # ══════════════════════════════════════════════════════════
-        # dict: 'YYYY-MM-DD' → turno_sigla substituto
-        trocas_colab = {}
-
+        trocas_colab = {}  # data_str -> novo_turno_sigla
         if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
-                # Trocas em que o colaborador é o REQUERENTE
+                # Como requerente: na data_req fica com turno_dest,
+                #                  na data_dest fica com turno_req
                 cursor.execute("""
                     SELECT
-                        CONVERT(VARCHAR(10), data_req,  23) AS data_req,
-                        CONVERT(VARCHAR(10), data_dest, 23) AS data_dest,
-                        turno_req,
-                        turno_dest
+                        CONVERT(VARCHAR(10), data_req,  23),
+                        CONVERT(VARCHAR(10), data_dest, 23),
+                        turno_req, turno_dest
                     FROM rponto.dbo.trocas_turno
-                    WHERE num_req = %s
-                      AND estado  = 'aprovado_chefe'
-                      AND (data_req  >= %s OR data_dest >= %s)
-                      AND (data_req  <= %s OR data_dest <= %s)
+                    WHERE num_req = %s AND estado = 'aprovado_chefe'
+                      AND (data_req  BETWEEN %s AND %s
+                        OR data_dest BETWEEN %s AND %s)
                 """, [num_auth,
-                      data_inicio_str, data_inicio_str,
-                      data_fim_str,    data_fim_str])
-                for row in cursor.fetchall():
-                    data_req_str, data_dest_str, turno_req, turno_dest = row
-                    if data_req_str:
-                        trocas_colab[data_req_str] = turno_dest
-                    if data_dest_str:
-                        trocas_colab[data_dest_str] = turno_req
+                      data_inicio_str, data_fim_str,
+                      data_inicio_str, data_fim_str])
+                for r in cursor.fetchall():
+                    dr, dd, treq, tdest = r
+                    if dr: trocas_colab[dr] = tdest
+                    if dd: trocas_colab[dd] = treq
 
-                # Trocas em que o colaborador é o DESTINO
+                # Como destino
                 cursor.execute("""
                     SELECT
-                        CONVERT(VARCHAR(10), data_req,  23) AS data_req,
-                        CONVERT(VARCHAR(10), data_dest, 23) AS data_dest,
-                        turno_req,
-                        turno_dest
+                        CONVERT(VARCHAR(10), data_req,  23),
+                        CONVERT(VARCHAR(10), data_dest, 23),
+                        turno_req, turno_dest
                     FROM rponto.dbo.trocas_turno
-                    WHERE num_dest = %s
-                      AND estado   = 'aprovado_chefe'
-                      AND (data_req  >= %s OR data_dest >= %s)
-                      AND (data_req  <= %s OR data_dest <= %s)
+                    WHERE num_dest = %s AND estado = 'aprovado_chefe'
+                      AND (data_req  BETWEEN %s AND %s
+                        OR data_dest BETWEEN %s AND %s)
                 """, [num_auth,
-                      data_inicio_str, data_inicio_str,
-                      data_fim_str,    data_fim_str])
-                for row in cursor.fetchall():
-                    data_req_str, data_dest_str, turno_req, turno_dest = row
-                    if data_dest_str:
-                        trocas_colab[data_dest_str] = turno_req
-                    if data_req_str:
-                        trocas_colab[data_req_str] = turno_dest
+                      data_inicio_str, data_fim_str,
+                      data_inicio_str, data_fim_str])
+                for r in cursor.fetchall():
+                    dr, dd, treq, tdest = r
+                    if dd: trocas_colab[dd] = treq
+                    if dr: trocas_colab[dr] = tdest
 
-        # ── Construir filtros ──────────────────────────────────────
+        # ══════════════════════════════════════════════════════════
+        # CARREGAR INFO DE TODOS OS TURNOS (cache)
+        # ══════════════════════════════════════════════════════════
+        turno_cache = {}
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT sigla, nome,
+                       CONVERT(VARCHAR(5), hora_inicio, 108),
+                       CONVERT(VARCHAR(5), hora_fim,    108),
+                       cor_hex, tipo
+                FROM rponto.dbo.turnos
+            """)
+            for row in cursor.fetchall():
+                turno_cache[row[0]] = {
+                    'nome':        row[1],
+                    'hora_inicio': row[2],
+                    'hora_fim':    row[3],
+                    'cor_hex':     row[4] or '#94a3b8',
+                    'tipo':        row[5],
+                }
+
+        # ══════════════════════════════════════════════════════════
+        # DETERMINAR EQUIPAS + ESQUEMAS A CARREGAR
+        # ══════════════════════════════════════════════════════════
+        #
+        # Regras:
+        #   RH/Admin   → todas as equipas, TODOS os esquemas (vista geral)
+        #   Chefe       → equipas do(s) dep(s), esquemas do(s) dep(s)
+        #   Colaborador → só a sua equipa, só o seu esquema
+        #
+        # Estrutura de consulta:
+        #   lista de (equipa, esquema) pares a carregar
+
         if is_rh or is_admin:
-            equipas_filter = ['A', 'B', 'C', 'D', 'E']
-            deps_filter    = None
-            num_filter     = None
+            # Pegar todos os pares (equipa, esquema) distintos existentes
+            with connections[connMssqlName].cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT equipa_letra, esquema_tipo
+                    FROM rponto.dbo.ciclo_laboracao
+                    ORDER BY equipa_letra, esquema_tipo
+                """)
+                pares_eq_esq = [(r[0], r[1]) for r in cursor.fetchall()]
 
         elif is_chefe:
+            # Para cada dep do chefe, descobrir as equipas e esquemas
+            pares_eq_esq = []
             if deps_chefe:
                 with connections[connMssqlName].cursor() as cursor:
                     placeholders = ','.join(['%s'] * len(deps_chefe))
                     cursor.execute(f"""
-                        SELECT DISTINCT RTRIM(LTRIM(tp_hor)) AS tp_hor
+                        SELECT DISTINCT
+                            RTRIM(LTRIM(tp_hor)) AS equipa
                         FROM rponto.dbo.time_registration
                         WHERE RTRIM(LTRIM(dep)) IN ({placeholders})
-                          AND tp_hor IN ('A','B','C','D','E')
+                          AND tp_hor IN {str(EQUIPAS_ROTATIVAS).replace(',)', ')')}
                     """, deps_chefe)
-                    equipas_filter = [r[0] for r in cursor.fetchall()]
-            else:
-                equipas_filter = []
-            deps_filter = deps_chefe
-            num_filter  = None
+                    equipas_chefe = [r[0] for r in cursor.fetchall()]
+
+                # Para cada equipa do chefe, determinar os esquemas dos seus deps
+                esquemas_chefe = list({
+                    _dep_to_esquema(d) for d in deps_chefe
+                })
+
+                with connections[connMssqlName].cursor() as cursor:
+                    if equipas_chefe and esquemas_chefe:
+                        eq_ph  = ','.join(["'%s'" % e for e in equipas_chefe])
+                        esq_ph = ','.join(["'%s'" % e for e in esquemas_chefe])
+                        cursor.execute(f"""
+                            SELECT DISTINCT equipa_letra, esquema_tipo
+                            FROM rponto.dbo.ciclo_laboracao
+                            WHERE equipa_letra IN ({eq_ph})
+                              AND esquema_tipo  IN ({esq_ph})
+                            ORDER BY equipa_letra, esquema_tipo
+                        """)
+                        pares_eq_esq = [(r[0], r[1]) for r in cursor.fetchall()]
 
         else:
             # Colaborador normal
-            if tp_hor_auth in ('A', 'B', 'C', 'D', 'E'):
-                equipas_filter = [tp_hor_auth]
+            if tp_hor_auth in EQUIPAS_ROTATIVAS:
+                esquema_colab = _dep_to_esquema(dep_auth)
+                # Verificar se existe exactamente este par na BD
+                with connections[connMssqlName].cursor() as cursor:
+                    cursor.execute("""
+                        SELECT TOP 1 equipa_letra, esquema_tipo
+                        FROM rponto.dbo.ciclo_laboracao
+                        WHERE equipa_letra = %s AND esquema_tipo = %s
+                    """, [tp_hor_auth, esquema_colab])
+                    row = cursor.fetchone()
+                    if row:
+                        pares_eq_esq = [(tp_hor_auth, esquema_colab)]
+                    else:
+                        # Fallback: primeiro esquema disponível para esta equipa
+                        cursor.execute("""
+                            SELECT TOP 1 equipa_letra, esquema_tipo
+                            FROM rponto.dbo.ciclo_laboracao
+                            WHERE equipa_letra = %s
+                            ORDER BY esquema_tipo
+                        """, [tp_hor_auth])
+                        row2 = cursor.fetchone()
+                        pares_eq_esq = [(tp_hor_auth, row2[1])] if row2 else []
             else:
-                equipas_filter = []
-            deps_filter = [dep_auth] if dep_auth else None
-            # ✅ FIX: num_filter só é usado para a query GER, não para as equipas rotativas
-            num_filter  = num_auth
+                pares_eq_esq = []
 
-        # ── Query turnos rotativos ─────────────────────────────────
+        # ══════════════════════════════════════════════════════════
+        # CARREGAR O CICLO — uma query por par (equipa, esquema)
+        # ou uma query única filtrando IN com AND por par
+        # ══════════════════════════════════════════════════════════
+        # escalas_rotativos: { data_str: [ {equipa, esquema, turno_sigla, ...} ] }
         escalas_rotativos = {}
 
-        if equipas_filter:
-            eq_placeholders = ','.join([f"'{e}'" for e in equipas_filter])
+        if pares_eq_esq:
+            # Construir um filtro WHERE eficiente:
+            # WHERE (equipa_letra = 'A' AND esquema_tipo = 'Laboracao_Continua')
+            #    OR (equipa_letra = 'B' AND esquema_tipo = 'Laboracao_Continua')
+            #    OR (equipa_letra = 'B' AND esquema_tipo = 'Armazem')
+            #    ...
+            par_conditions = " OR ".join([
+                f"(c.equipa_letra = '{eq}' AND c.esquema_tipo = '{esq}')"
+                for eq, esq in pares_eq_esq
+            ])
+
             query_ciclo = f"""
                 SET DATEFIRST 1;
                 SELECT
                     FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'),
-                           'yyyy-MM-dd')            AS data,
-                    c.equipa_letra                  AS equipa,
-                    c.esquema_tipo                  AS esquema,
+                           'yyyy-MM-dd')                       AS data,
+                    c.equipa_letra                             AS equipa,
+                    c.esquema_tipo                             AS esquema,
                     c.turno_sigla,
-                    COALESCE(t.nome, 'Sem turno')   AS turno_nome,
-                    CONVERT(VARCHAR(5), t.hora_inicio, 108) AS hora_inicio,
-                    CONVERT(VARCHAR(5), t.hora_fim,    108) AS hora_fim,
-                    t.cor_hex,
-                    CASE WHEN c.ordem_rotacao IN (1,358,359,365)
-                         THEN 1 ELSE 0 END          AS is_feriado,
-                    h.name                          AS nome_feriado
+                    COALESCE(t.nome, c.turno_sigla)            AS turno_nome,
+                    CONVERT(VARCHAR(5), t.hora_inicio, 108)    AS hora_inicio,
+                    CONVERT(VARCHAR(5), t.hora_fim,    108)    AS hora_fim,
+                    ISNULL(t.cor_hex, '#94a3b8')               AS cor_hex,
+                    CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0
+                    END                                        AS is_feriado,
+                    h.name                                     AS nome_feriado
                 FROM rponto.dbo.ciclo_laboracao c
                 LEFT JOIN rponto.dbo.turnos t
                     ON t.sigla = c.turno_sigla
                 LEFT JOIN rponto.dbo.holidays h
-                    ON h.holiday_date = DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
+                    ON h.holiday_date =
+                       DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
                 WHERE DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
                         BETWEEN '{data_inicio_str}' AND '{data_fim_str}'
-                  AND c.equipa_letra IN ({eq_placeholders})
-                ORDER BY c.ordem_rotacao, c.equipa_letra
+                  AND ({par_conditions})
+                ORDER BY data, c.equipa_letra, c.esquema_tipo
             """
+
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute(query_ciclo)
                 cols_ciclo = [c[0] for c in cursor.description]
@@ -5713,186 +5881,167 @@ def GetTurnosColaborador(request, format=None):
                         'turno_nome':   r['turno_nome'],
                         'hora_inicio':  r['hora_inicio'],
                         'hora_fim':     r['hora_fim'],
-                        'cor_hex':      r['cor_hex'] or '#94a3b8',
+                        'cor_hex':      r['cor_hex'],
                         'is_feriado':   bool(r['is_feriado']),
                         'nome_feriado': r['nome_feriado'],
-                        'tipo':         'rotativo',
                         'is_troca':     False,
                         'is_ferias':    False,
                     })
 
-        # ── Query colaboradores GER ────────────────────────────────
+        # ══════════════════════════════════════════════════════════
+        # COLABORADORES GER (horário geral fixo)
+        # ══════════════════════════════════════════════════════════
         colaboradores_ger = []
 
-        precisa_ger = (
+        carregar_ger = (
             is_rh or is_admin or is_chefe
-            or (not is_rh and not is_admin and not is_chefe and tp_hor_auth == 'GER')
+            or (not is_rh and not is_admin and not is_chefe
+                and tp_hor_auth not in EQUIPAS_ROTATIVAS)
         )
 
-        if precisa_ger:
-            where_ger  = ["RTRIM(LTRIM(tr.tp_hor)) = 'GER'"]
+        if carregar_ger:
+            where_ger  = ["RTRIM(LTRIM(tr.tp_hor)) NOT IN ('A','B','C','D','E')"]
             params_ger = []
 
-            # ✅ FIX: para colaborador GER, filtrar por num diretamente
-            # (mais eficiente e correto — garante que só vem o próprio)
-            if num_filter and not is_rh and not is_admin and not is_chefe:
+            if not is_rh and not is_admin and not is_chefe and num_auth:
                 where_ger.append("tr.num = %s")
-                params_ger.append(num_filter)
-            elif deps_filter:
-                placeholders = ','.join(['%s'] * len(deps_filter))
+                params_ger.append(num_auth)
+            elif deps_chefe:
+                placeholders = ','.join(['%s'] * len(deps_chefe))
                 where_ger.append(f"RTRIM(LTRIM(tr.dep)) IN ({placeholders})")
-                params_ger.extend(deps_filter)
+                params_ger.extend(deps_chefe)
+            # RH/Admin: sem restrição por dep
 
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute(f"""
-                    SELECT
+                    SELECT DISTINCT
                         tr.num,
                         RTRIM(LTRIM(tr.dep))    AS dep,
                         RTRIM(LTRIM(tr.tp_hor)) AS tp_hor
                     FROM rponto.dbo.time_registration tr
                     WHERE {' AND '.join(where_ger)}
-                      AND tr.dts >= %s
-                    GROUP BY
-                        tr.num,
-                        RTRIM(LTRIM(tr.dep)),
-                        RTRIM(LTRIM(tr.tp_hor))
-                """, params_ger + [data_inicio_str])
+                """, params_ger)
                 cols_ger = [c[0] for c in cursor.description]
-                colaboradores_ger = [dict(zip(cols_ger, r)) for r in cursor.fetchall()]
+                colaboradores_ger = [dict(zip(cols_ger, r))
+                                     for r in cursor.fetchall()]
 
+        # Obter nomes dos colaboradores GER via SAGE
         nums_ger  = [c['num'] for c in colaboradores_ger]
-        nomes_ger = _get_nomes_colaboradores(nums_ger) if nums_ger else {}
+        nomes_ger = {}
+        if nums_ger:
+            try:
+                nomes_ger = _get_nomes_colaboradores(nums_ger)
+            except Exception:
+                pass
         for c in colaboradores_ger:
             c['nome'] = nomes_ger.get(c['num'], {}).get('nome', '')
 
-        # ── Turno info por sigla (para resolução de trocas) ────────
-        turno_info_cache = {}
-        with connections[connMssqlName].cursor() as cursor:
-            cursor.execute("""
-                SELECT sigla, nome,
-                       CONVERT(VARCHAR(5), hora_inicio, 108) AS hora_inicio,
-                       CONVERT(VARCHAR(5), hora_fim,    108) AS hora_fim,
-                       cor_hex, tipo
-                FROM rponto.dbo.turnos
-            """)
-            for row in cursor.fetchall():
-                turno_info_cache[row[0]] = {
-                    'nome':        row[1],
-                    'hora_inicio': row[2],
-                    'hora_fim':    row[3],
-                    'cor_hex':     row[4] or '#94a3b8',
-                    'tipo':        row[5],
-                }
-
-        # ── Montar calendário ──────────────────────────────────────
+        # ══════════════════════════════════════════════════════════
+        # MONTAR CALENDÁRIO DIA A DIA
+        # ══════════════════════════════════════════════════════════
+        nomes_dia = ['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo']
         dt_current = dt_inicio
         dt_end     = datetime.strptime(data_fim_str, '%Y-%m-%d')
         escalas    = []
 
         while dt_current <= dt_end:
             data_str    = dt_current.strftime('%Y-%m-%d')
-            iso_weekday = dt_current.isoweekday()
+            iso_weekday = dt_current.isoweekday()   # 1=Seg ... 7=Dom
             is_fds      = iso_weekday >= 6
 
             dia_obj = {
                 'data':        data_str,
-                'dia_semana':  dt_current.strftime('%A'),
+                'dia_semana':  nomes_dia[dt_current.weekday()],
                 'iso_weekday': iso_weekday,
                 'is_fds':      is_fds,
-                'equipas':     [],
+                # equipas: lista de turnos rotativos para esta data
+                # (pode ter múltiplos esquemas/equipas na vista geral)
+                'equipas':     list(escalas_rotativos.get(data_str, [])),
+                # ger: lista de colaboradores com horário geral
                 'ger':         [],
+                'tem_ferias':  False,
+                'tem_troca':   False,
             }
 
-            # ── Turnos rotativos (equipas) ─────────────────────────
-            for eq in escalas_rotativos.get(data_str, []):
-                dia_obj['equipas'].append(eq)
-
-            # ── GER ────────────────────────────────────────────────
+            # GER — turno calculado pelo dia da semana
             for colab in colaboradores_ger:
                 turno_sigla = 'GER' if iso_weekday <= 5 else 'DSC'
+                ti          = turno_cache.get(turno_sigla, {})
                 dia_obj['ger'].append({
                     'num':         colab['num'],
-                    'nome':        colab['nome'],
+                    'nome':        colab.get('nome', ''),
                     'dep':         colab['dep'],
                     'turno_sigla': turno_sigla,
-                    'turno_nome':  'Geral' if iso_weekday <= 5 else 'Descanso',
-                    'hora_inicio': '09:00' if iso_weekday <= 5 else None,
-                    'hora_fim':    '18:00' if iso_weekday <= 5 else None,
-                    'almoco_ini':  '13:00' if iso_weekday <= 5 else None,
-                    'almoco_fim':  '14:00' if iso_weekday <= 5 else None,
-                    'cor_hex':     '#F59E0B' if iso_weekday <= 5 else '#DC2626',
-                    'tipo':        'ger',
+                    'turno_nome':  ti.get('nome', 'Geral' if iso_weekday <= 5 else 'Descanso'),
+                    'hora_inicio': ti.get('hora_inicio') if iso_weekday <= 5 else None,
+                    'hora_fim':    ti.get('hora_fim')    if iso_weekday <= 5 else None,
+                    'cor_hex':     ti.get('cor_hex', '#F59E0B') if iso_weekday <= 5 else '#DC2626',
                     'is_troca':    False,
                     'is_ferias':   False,
                 })
 
-            # ═══════════════════════════════════════════════���══════
-            # OVERRIDE FÉRIAS — só vista pessoal do colaborador
-            # ══════════════════════════════════════════════════════
+            # ── OVERRIDE FÉRIAS (só vista pessoal) ────────────────
             if data_str in ferias_colab:
-                for eq in dia_obj['equipas']:
-                    if eq.get('turno_sigla') not in ('DSC',):
-                        eq['turno_sigla_original'] = eq['turno_sigla']
-                        eq['turno_nome_original']  = eq['turno_nome']
-                        eq['turno_sigla'] = 'FER'
-                        eq['turno_nome']  = 'Férias'
-                        eq['cor_hex']     = '#9333EA'
-                        eq['is_ferias']   = True
-
-                for g in dia_obj['ger']:
-                    if g.get('turno_sigla') not in ('DSC',):
-                        g['turno_sigla_original'] = g['turno_sigla']
-                        g['turno_sigla'] = 'FER'
-                        g['turno_nome']  = 'Férias'
-                        g['cor_hex']     = '#9333EA'
-                        g['is_ferias']   = True
-
                 dia_obj['tem_ferias'] = True
-
-            # ══════════════════════════════════════════════════════
-            # OVERRIDE TROCAS — só vista pessoal do colaborador
-            # ══════════════════════════════════════════════════════
-            if data_str in trocas_colab:
-                novo_turno_sigla = trocas_colab[data_str]
-                info_turno       = turno_info_cache.get(novo_turno_sigla, {})
-
                 for eq in dia_obj['equipas']:
                     eq['turno_sigla_original'] = eq['turno_sigla']
-                    eq['turno_sigla'] = novo_turno_sigla
-                    eq['turno_nome']  = info_turno.get('nome', novo_turno_sigla)
-                    eq['hora_inicio'] = info_turno.get('hora_inicio')
-                    eq['hora_fim']    = info_turno.get('hora_fim')
-                    eq['cor_hex']     = info_turno.get('cor_hex', '#94a3b8')
-                    eq['is_troca']    = True
-
+                    eq['turno_nome_original']  = eq['turno_nome']
+                    eq['turno_sigla'] = 'FER'
+                    eq['turno_nome']  = 'Férias'
+                    eq['cor_hex']     = '#9333EA'
+                    eq['is_ferias']   = True
                 for g in dia_obj['ger']:
                     g['turno_sigla_original'] = g['turno_sigla']
-                    g['turno_sigla'] = novo_turno_sigla
-                    g['turno_nome']  = info_turno.get('nome', novo_turno_sigla)
-                    g['hora_inicio'] = info_turno.get('hora_inicio')
-                    g['hora_fim']    = info_turno.get('hora_fim')
-                    g['cor_hex']     = info_turno.get('cor_hex', '#94a3b8')
-                    g['is_troca']    = True
+                    g['turno_sigla'] = 'FER'
+                    g['turno_nome']  = 'Férias'
+                    g['cor_hex']     = '#9333EA'
+                    g['is_ferias']   = True
 
-                dia_obj['tem_troca'] = True
+            # ── OVERRIDE TROCAS (só vista pessoal) ────────────────
+            if data_str in trocas_colab:
+                dia_obj['tem_troca']     = True
+                novo_sigla               = trocas_colab[data_str]
+                info_novo                = turno_cache.get(novo_sigla, {})
+                for eq in dia_obj['equipas']:
+                    if not eq.get('is_ferias'):
+                        eq['turno_sigla_original'] = eq['turno_sigla']
+                        eq['turno_sigla'] = novo_sigla
+                        eq['turno_nome']  = info_novo.get('nome', novo_sigla)
+                        eq['hora_inicio'] = info_novo.get('hora_inicio')
+                        eq['hora_fim']    = info_novo.get('hora_fim')
+                        eq['cor_hex']     = info_novo.get('cor_hex', '#94a3b8')
+                        eq['is_troca']    = True
+                for g in dia_obj['ger']:
+                    if not g.get('is_ferias'):
+                        g['turno_sigla_original'] = g['turno_sigla']
+                        g['turno_sigla'] = novo_sigla
+                        g['turno_nome']  = info_novo.get('nome', novo_sigla)
+                        g['hora_inicio'] = info_novo.get('hora_inicio')
+                        g['hora_fim']    = info_novo.get('hora_fim')
+                        g['cor_hex']     = info_novo.get('cor_hex', '#94a3b8')
+                        g['is_troca']    = True
 
             escalas.append(dia_obj)
             dt_current += timedelta(days=1)
 
+        # ── Metadados do utilizador ────────────────────────────────
         user_info = {
-            'num':        num_auth,
-            'tp_hor':     tp_hor_auth,
-            'dep':        dep_auth,
-            'is_rh':      is_rh,
-            'is_admin':   is_admin,
-            'is_chefe':   is_chefe,
-            'deps_chefe': deps_chefe,
-            'role':       'rh'    if (is_rh or is_admin)
-                          else 'chefe' if is_chefe
-                          else 'colaborador',
+            'num':          num_auth,
+            'tp_hor':       tp_hor_auth,
+            'dep':          dep_auth,
+            'esquema':      _dep_to_esquema(dep_auth) if dep_auth else ESQUEMA_DEFAULT,
+            'pares_carregados': pares_eq_esq,
+            'is_rh':        is_rh,
+            'is_admin':     is_admin,
+            'is_chefe':     is_chefe,
+            'deps_chefe':   deps_chefe,
+            'role':         ('rh' if (is_rh or is_admin)
+                             else 'chefe' if is_chefe
+                             else 'colaborador'),
         }
 
-        print(f"[GetTurnos] escalas={len(escalas)} ferias={len(ferias_colab)} "
+        print(f"[GetTurnos] OK escalas={len(escalas)} "
+              f"pares={pares_eq_esq} ferias={len(ferias_colab)} "
               f"trocas={len(trocas_colab)} ger={len(colaboradores_ger)}")
 
         return Response({
@@ -5907,6 +6056,7 @@ def GetTurnosColaborador(request, format=None):
     except Exception as e:
         traceback.print_exc()
         return Response({'success': False, 'error': str(e)}, status=500)
+
 
 
 
@@ -6700,11 +6850,20 @@ def ColaboradoresDepartamento(request, format=None):
 #region Notificações
 
 def NotificacoesCount(request, format=None):
+    """
+    Contagem de notificações não lidas.
+
+    Casos cobertos:
+      A) Colaborador é destino de troca pendente de resposta        → estado='pendente'
+      B) Chefe DPROD: trocas aceites aguardam aprovação             → estado='aceite_dest'
+      C) Colaborador (req OU dest) de troca aprovada pelo chefe     → estado='aprovado_chefe'
+         (o chefe registou a troca directamente — ambos são notificados)
+    """
     try:
         filter_data = request.data.get('filter', {})
         num         = (filter_data.get('num') or '').strip()
         is_chefe    = bool(filter_data.get('isChefe', False))
-        deps_chefe  = filter_data.get('deps_chefe', []) or []
+        deps_chefe  = [str(d).strip() for d in (filter_data.get('deps_chefe') or [])]
 
         if not num:
             return Response({"count": 0, "status": "success"})
@@ -6712,7 +6871,8 @@ def NotificacoesCount(request, format=None):
         count = 0
 
         with connections[connMssqlName].cursor() as cursor:
-            # 1. Trocas onde o colaborador é destino e ainda não respondeu
+
+            # A) Trocas pendentes onde o colaborador é destino
             cursor.execute("""
                 SELECT COUNT(*)
                 FROM rponto.dbo.trocas_turno
@@ -6721,16 +6881,27 @@ def NotificacoesCount(request, format=None):
             """, [num])
             count += cursor.fetchone()[0]
 
-            # 2. Chefe de DPROD: trocas aceites que aguardam aprovação
-            if is_chefe and 'DPROD' in [d.strip() for d in deps_chefe]:
+            # B) Chefe DPROD: trocas aceites aguardam aprovação do chefe
+            if is_chefe and 'DPROD' in deps_chefe:
                 cursor.execute("""
                     SELECT COUNT(*)
                     FROM rponto.dbo.trocas_turno
-                    WHERE estado    = 'aceite_dest'
+                    WHERE estado = 'aceite_dest'
                       AND (RTRIM(LTRIM(dep_req))  = 'DPROD'
                         OR RTRIM(LTRIM(dep_dest)) = 'DPROD')
                 """)
                 count += cursor.fetchone()[0]
+
+            # C) Trocas aprovadas pelo chefe onde o colaborador é requerente OU destino
+            #    e ainda não foram vistas (created_at nas últimas 7 dias como proxy de "nova")
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM rponto.dbo.trocas_turno
+                WHERE estado      = 'aprovado_chefe'
+                  AND (num_req  = %s OR num_dest = %s)
+                  AND chefe_data >= DATEADD(DAY, -7, GETDATE())
+            """, [num, num])
+            count += cursor.fetchone()[0]
 
         return Response({"count": count, "status": "success"})
 
@@ -6740,11 +6911,19 @@ def NotificacoesCount(request, format=None):
 
 
 def NotificacoesList(request, format=None):
+    """
+    Lista detalhada de notificações.
+
+    Casos cobertos:
+      A) Colaborador é destino de troca pendente de resposta
+      B) Chefe DPROD: trocas aceites aguardam aprovação
+      C) Colaborador (req OU dest) de troca aprovada pelo chefe (últimos 7 dias)
+    """
     try:
         filter_data = request.data.get('filter', {})
         num         = (filter_data.get('num') or '').strip()
         is_chefe    = bool(filter_data.get('isChefe', False))
-        deps_chefe  = filter_data.get('deps_chefe', []) or []
+        deps_chefe  = [str(d).strip() for d in (filter_data.get('deps_chefe') or [])]
 
         if not num:
             return Response({"rows": [], "total": 0, "status": "success"})
@@ -6752,7 +6931,8 @@ def NotificacoesList(request, format=None):
         notificacoes = []
 
         with connections[connMssqlName].cursor() as cursor:
-            # 1. Trocas pendentes de resposta (colaborador é destino)
+
+            # ── A) Trocas pendentes — colaborador é destino ────────
             cursor.execute("""
                 SELECT
                     id,
@@ -6771,11 +6951,8 @@ def NotificacoesList(request, format=None):
             cols = [c[0] for c in cursor.description]
             trocas_pendentes = [dict(zip(cols, r)) for r in cursor.fetchall()]
 
-            # Enriquecer com nome do requerente
-            nums_req = list({r['num_req'] for r in trocas_pendentes if r.get('num_req')})
-            nomes    = {}
-            if nums_req:
-                nomes = _get_nomes_colaboradores(nums_req)
+            nums_enriquecer = list({r['num_req'] for r in trocas_pendentes if r.get('num_req')})
+            nomes = _get_nomes_colaboradores(nums_enriquecer) if nums_enriquecer else {}
 
             for t in trocas_pendentes:
                 nome_req = nomes.get(t['num_req'], {}).get('nome', t['num_req'])
@@ -6785,17 +6962,17 @@ def NotificacoesList(request, format=None):
                     "tipo":     "troca_pendente",
                     "titulo":   "Pedido de Troca de Turno",
                     "mensagem": (
-                        f"{nome_req} quer trocar o seu turno "
-                        f"de {t['data_dest']} ({t['turno_dest']}) "
-                        f"com o turno de {t['data_req']} ({t['turno_req']})"
+                        f"{nome_req} quer trocar consigo: "
+                        f"o seu turno de {t['data_dest']} ({t['turno_dest']}) "
+                        f"pelo turno de {t['data_req']} ({t['turno_req']})"
                     ),
                     "data":     t['created_at'],
                     "lida":     False,
-                    "acao":     "responder",   # o frontend usa isto para saber o que renderizar
+                    "acao":     "responder",
                 })
 
-            # 2. Chefe DPROD: trocas aceites que aguardam aprovação
-            if is_chefe and 'DPROD' in [d.strip() for d in deps_chefe]:
+            # ── B) Chefe DPROD: trocas aceites aguardam aprovação ──
+            if is_chefe and 'DPROD' in deps_chefe:
                 cursor.execute("""
                     SELECT
                         id,
@@ -6807,19 +6984,21 @@ def NotificacoesList(request, format=None):
                         turno_dest,
                         CONVERT(VARCHAR(19), created_at, 120) AS created_at
                     FROM rponto.dbo.trocas_turno
-                    WHERE estado    = 'aceite_dest'
+                    WHERE estado = 'aceite_dest'
                       AND (RTRIM(LTRIM(dep_req))  = 'DPROD'
                         OR RTRIM(LTRIM(dep_dest)) = 'DPROD')
                     ORDER BY created_at DESC
                 """)
-                cols_chefe = [c[0] for c in cursor.description]
-                trocas_chefe = [dict(zip(cols_chefe, r)) for r in cursor.fetchall()]
+                cols_b = [c[0] for c in cursor.description]
+                trocas_aceites = [dict(zip(cols_b, r)) for r in cursor.fetchall()]
 
-                nums_all = list({r['num_req'] for r in trocas_chefe} |
-                                {r['num_dest'] for r in trocas_chefe})
+                nums_all = list(
+                    {r['num_req'] for r in trocas_aceites} |
+                    {r['num_dest'] for r in trocas_aceites}
+                )
                 nomes_all = _get_nomes_colaboradores(nums_all) if nums_all else {}
 
-                for t in trocas_chefe:
+                for t in trocas_aceites:
                     nome_req  = nomes_all.get(t['num_req'],  {}).get('nome', t['num_req'])
                     nome_dest = nomes_all.get(t['num_dest'], {}).get('nome', t['num_dest'])
                     notificacoes.append({
@@ -6829,12 +7008,67 @@ def NotificacoesList(request, format=None):
                         "titulo":   "Troca Aguarda Aprovação",
                         "mensagem": (
                             f"Troca entre {nome_req} ({t['data_req']}) "
-                            f"e {nome_dest} ({t['data_dest']}) aceite — aguarda a sua aprovação"
+                            f"e {nome_dest} ({t['data_dest']}) foi aceite — aguarda a sua aprovação"
                         ),
                         "data":     t['created_at'],
                         "lida":     False,
                         "acao":     "aprovar",
                     })
+
+            # ── C) Trocas aprovadas pelo chefe (últimos 7 dias) ────
+            #    O colaborador (req ou dest) é notificado do resultado
+            cursor.execute("""
+                SELECT
+                    id,
+                    num_req,
+                    num_dest,
+                    CONVERT(VARCHAR(10), data_req,  23) AS data_req,
+                    CONVERT(VARCHAR(10), data_dest, 23) AS data_dest,
+                    turno_req,
+                    turno_dest,
+                    chefe_num,
+                    CONVERT(VARCHAR(19), chefe_data, 120) AS chefe_data
+                FROM rponto.dbo.trocas_turno
+                WHERE estado      = 'aprovado_chefe'
+                  AND (num_req  = %s OR num_dest = %s)
+                  AND chefe_data >= DATEADD(DAY, -7, GETDATE())
+                ORDER BY chefe_data DESC
+            """, [num, num])
+            cols_c = [c[0] for c in cursor.description]
+            trocas_aprovadas = [dict(zip(cols_c, r)) for r in cursor.fetchall()]
+
+            nums_c = list(
+                {r['num_req'] for r in trocas_aprovadas} |
+                {r['num_dest'] for r in trocas_aprovadas}
+            )
+            nomes_c = _get_nomes_colaboradores(nums_c) if nums_c else {}
+
+            for t in trocas_aprovadas:
+                nome_req  = nomes_c.get(t['num_req'],  {}).get('nome', t['num_req'])
+                nome_dest = nomes_c.get(t['num_dest'], {}).get('nome', t['num_dest'])
+
+                # Mensagem personalizada conforme o papel do utilizador na troca
+                if t['num_req'] == num:
+                    mensagem = (
+                        f"A sua troca com {nome_dest} foi aprovada pelo chefe: "
+                        f"{t['data_req']} ({t['turno_req']}) ↔ {t['data_dest']} ({t['turno_dest']})"
+                    )
+                else:
+                    mensagem = (
+                        f"A troca com {nome_req} foi aprovada pelo chefe: "
+                        f"{t['data_req']} ({t['turno_req']}) ↔ {t['data_dest']} ({t['turno_dest']})"
+                    )
+
+                notificacoes.append({
+                    "id":       f"aprovada_{t['id']}_{num}",
+                    "troca_id": t['id'],
+                    "tipo":     "troca_aprovada",
+                    "titulo":   "Troca de Turno Aprovada ✓",
+                    "mensagem": mensagem,
+                    "data":     t['chefe_data'],
+                    "lida":     False,
+                    "acao":     "info",
+                })
 
         # Ordenar por data desc
         notificacoes.sort(key=lambda x: x['data'] or '', reverse=True)
@@ -6851,4 +7085,9 @@ def NotificacoesList(request, format=None):
 
 
 def MarcarNotificacaoLida(request, format=None):
+    """
+    Stub — as notificações derivam do estado das trocas.
+    O frontend usa este endpoint para limpar o badge localmente
+    após o utilizador abrir o dropdown.
+    """
     return Response({"status": "success"})
