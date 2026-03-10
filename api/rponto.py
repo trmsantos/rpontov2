@@ -845,129 +845,58 @@ def InvalidRecordsList(request, format=None):
 
 def UpdatePicagem(request, format=None):
     try:
-        # Data arrives as: request.data['filter']['payload']
-        # (sent by fetchPost in the frontend)
-        filter_data = request.data.get('filter', {})
-        data = filter_data.get('payload', {})
+        payload = request.data.get('filter', {}).get('payload', {})
 
-        # Fallback: also support direct body.data (for future use)
-        if not data:
-            body = request.data.get('body', {})
-            data = body.get('data', {})
-
-        # Last fallback: data might be at root of filter
-        if not data:
-            data = filter_data
-
-        num = data.get('num')
-        dts = data.get('dts')
+        num = payload.get('num')
+        dts = payload.get('dts')
 
         if not num or not dts:
             return Response({"status": "error", "title": "num e dts são obrigatórios"})
 
         # Build update dict
-        update_fields = {}
-        total_picagens = 0
-
+        update_data = {}
+        nt = 0
         for i in range(1, 9):
             padded = str(i).zfill(2)
             ss_key = f'ss_{padded}'
             ty_key = f'ty_{padded}'
-
-            ss_val = data.get(ss_key)
-            ty_val = data.get(ty_key)
+            ss_val = payload.get(ss_key)
+            ty_val = payload.get(ty_key)
 
             if ss_val:
-                # Normalise datetime-local "YYYY-MM-DDTHH:MM" → "YYYY-MM-DD HH:MM:SS"
-                ss_str = str(ss_val).replace('T', ' ')
-                if len(ss_str) == 16:   # missing seconds
-                    ss_str = ss_str + ':00'
-                update_fields[ss_key] = ss_str
-                total_picagens += 1
-            else:
-                update_fields[ss_key] = None
+                ss_val = ss_val.replace('T', ' ')
+                if len(ss_val) == 16:          
+                    ss_val = ss_val + ':00'
+                nt += 1
 
-            update_fields[ty_key] = ty_val.strip() if ty_val else None
+            update_data[ss_key] = ss_val if ss_val else None
+            update_data[ty_key] = ty_val.strip() if ty_val and ty_val.strip() else None
 
-        update_fields['nt']     = total_picagens
-        update_fields['edited'] = 1
+        update_data['nt'] = nt
+        update_data['edited'] = 1
 
         with connections[connMssqlName].cursor() as cursor:
-            dts_clean = str(dts)[:10]
+            set_parts = []
+            params = []
+            for key, val in update_data.items():
+                set_parts.append(f"{key} = %s")
+                params.append(val)
 
-            cursor.execute(
-                "SELECT id FROM rponto.dbo.time_registration "
-                "WHERE num = %s AND CAST(dts AS DATE) = %s",
-                [num, dts_clean]
-            )
-            row = cursor.fetchone()
+            params.extend([num, dts[:10]])  
 
-            if not row:
-                return Response({
-                    "status": "error",
-                    "title": f"Registo não encontrado para num={num} dts={dts_clean}"
-                })
+            sql = f"""
+                UPDATE rponto.dbo.time_registration
+                SET {', '.join(set_parts)}
+                WHERE num = %s
+                  AND CONVERT(DATE, dts) = %s
+            """
+            cursor.execute(sql, params)
 
-            record_id = row[0]
-
-            dml = dbmssql.dml(
-                TypeDml.UPDATE,
-                update_fields,
-                "rponto.dbo.time_registration",
-                {"id": f"=={record_id}"},
-                None,
-                False
-            )
-            dbmssql.execute(dml.statement, cursor, dml.parameters)
-
-        return Response({
-            "status": "success",
-            "title": "Picagem actualizada com sucesso!"
-        })
+        return Response({"status": "success", "title": "Registo actualizado com sucesso!"})
 
     except Exception as e:
         traceback.print_exc()
         return Response({"status": "error", "title": str(e)})
-
-
-
-def UpdateRecords(request, format=None):
-    values = request.data["parameters"].get("values")
-    try:
-        with transaction.atomic():
-            with connections[connMssqlName].cursor() as cursor:                  
-                dml = dbmssql.dml(TypeDml.UPDATE,{
-                    "nt":values.get("nt"),
-                    "ss_01":values.get("ss_01"),
-                    "ts_01":values.get("ts_01"),
-                    "ty_01":values.get("ty_01"),
-                    "ss_02":values.get("ss_02"),
-                    "ts_02":values.get("ts_02"),
-                    "ty_02":values.get("ty_02"),
-                    "ts_03":values.get("ts_03"),
-                    "ss_03":values.get("ss_03"),
-                    "ty_03":values.get("ty_03"),
-                    "ts_04":values.get("ts_04"),
-                    "ss_04":values.get("ss_04"),
-                    "ty_04":values.get("ty_04"),
-                    "ts_05":values.get("ts_05"),
-                    "ss_05":values.get("ss_05"),
-                    "ty_05":values.get("ty_05"),
-                    "ts_06":values.get("ts_06"),
-                    "ss_06":values.get("ss_06"),
-                    "ty_06":values.get("ty_06"),
-                    "ts_07":values.get("ts_07"),
-                    "ss_07":values.get("ss_07"),
-                    "ty_07":values.get("ty_07"),
-                    "ts_08":values.get("ts_08"),
-                    "ss_08":values.get("ss_08"),
-                    "ty_08":values.get("ty_08"),
-                    "edited":1
-                    }, "rponto.dbo.time_registration",{"id":f'=={values.get("id")}'},None,False)
-                dbmssql.execute(dml.statement, cursor, dml.parameters)
-        return Response({"status": "success", "title":f"""Registo atualizado com sucesso!"""})
-    except Error as error:
-        return Response({"status": "error", "title": str(error)})
 
 
 

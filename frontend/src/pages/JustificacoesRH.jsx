@@ -345,8 +345,13 @@ export default function JustificacoesRH() {
             const res = await fetchPost({
                 url: `${API_URL}/rponto/sqlp/`,
                 withCredentials: true,
-                parameters: { method: "JustificacoesList", isRH: true },
-                filter: filters,
+                parameters: { method: "JustificacoesList" },  
+                filter: {
+                    isRH:    true,          
+                    isChefe: false,
+                    deps_chefe: [],
+                    ...filters              
+                },
                 pagination: { enabled: true, page: 1, pageSize: 200 }
             });
             if (res.data.status === 'success') {

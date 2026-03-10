@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Form, Input } from 'antd';
 import { SearchOutlined, FilterOutlined, ClearOutlined, EditOutlined } from '@ant-design/icons';
 import { fetchPost } from "utils/fetch";
@@ -13,7 +13,9 @@ const DataTable = ({
     pageSize = 20,
     defaultSort = [],
     rowClassName,
-    openNotification
+    openNotification,
+    // onRowPatch: opcional – callback para aplicar patches externos à tabela sem refetch
+    onRegisterPatch,
 }) => {
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
@@ -23,14 +25,42 @@ const DataTable = ({
     const [showFilters, setShowFilters] = useState(false);
     const [formFilter] = Form.useForm();
 
+    // Guardar referências estáveis para apiConfig e defaultSort
+    // para evitar que mudanças de referência disparem re-fetchs
+    const apiConfigRef = useRef(apiConfig);
+    const defaultSortRef = useRef(defaultSort);
+    const pageSizeRef = useRef(pageSize);
+    const openNotificationRef = useRef(openNotification);
+
+    // Actualizar refs sem causar re-renders
+    useEffect(() => { apiConfigRef.current = apiConfig; });
+    useEffect(() => { defaultSortRef.current = defaultSort; });
+    useEffect(() => { pageSizeRef.current = pageSize; });
+    useEffect(() => { openNotificationRef.current = openNotification; });
+
+    // Patch de linhas sem refetch (utilizado pelo componente pai após guardar edição)
+    const patchRow = useCallback((matchFn, updatedData) => {
+        setRows(prev => prev.map(row => matchFn(row) ? { ...row, ...updatedData } : row));
+    }, []);
+
+    // Expor patchRow ao componente pai via callback
+    useEffect(() => {
+        if (onRegisterPatch) onRegisterPatch(patchRow);
+    }, [onRegisterPatch, patchRow]);
+
     const fetchData = useCallback(async (page = 1, filtersToUse = {}) => {
+        const cfg = apiConfigRef.current;
+        const sort = defaultSortRef.current;
+        const pgSize = pageSizeRef.current;
+        const notify = openNotificationRef.current;
+
         setIsLoading(true);
         try {
             const filterPayload = { tstamp: Date.now() };
 
             // 1) defaultFilter (fixos)
-            if (apiConfig.defaultFilter) {
-                Object.entries(apiConfig.defaultFilter).forEach(([key, value]) => {
+            if (cfg.defaultFilter) {
+                Object.entries(cfg.defaultFilter).forEach(([key, value]) => {
                     if (value !== undefined && value !== null && value !== '') {
                         filterPayload[key] = value;
                     }
@@ -50,30 +80,28 @@ const DataTable = ({
                         startDate = value[0].format(DATE_FORMAT);
                         endDate = value[1].format(DATE_FORMAT);
                     }
-
                     if (startDate && endDate) {
                         filterPayload.fdata = [`>=${startDate} 00:00:00`, `<=${endDate} 23:59:59`];
                     }
                 } else if (value && typeof value === 'string') {
-                    // mantém comportamento atual para campos tipo pesquisa
                     filterPayload[key] = value.includes('%') ? value : `%${value}%`;
                 } else if (value !== undefined && value !== null && value !== '') {
                     filterPayload[key] = value;
                 }
             });
 
-            // 3) extraFilter (contexto auth/permissões) -> sobrepõe se necessário
-            if (apiConfig.extraFilter) {
-                Object.assign(filterPayload, apiConfig.extraFilter);
+            // 3) extraFilter (contexto auth/permissões)
+            if (cfg.extraFilter) {
+                Object.assign(filterPayload, cfg.extraFilter);
             }
 
             const response = await fetchPost({
-                url: apiConfig.url,
+                url: cfg.url,
                 withCredentials: true,
-                parameters: { method: apiConfig.method },
+                parameters: { method: cfg.method },
                 filter: filterPayload,
-                pagination: { enabled: true, page, pageSize },
-                sort: defaultSort
+                pagination: { enabled: true, page, pageSize: pgSize },
+                sort: sort
             });
 
             if (response?.data?.status === "success") {
@@ -81,14 +109,14 @@ const DataTable = ({
                 setTotal(response.data.total || 0);
                 setCurrentPage(page);
             } else {
-                openNotification?.("error", "top", "Erro", response?.data?.title || "Erro ao carregar dados");
+                notify?.("error", "top", "Erro", response?.data?.title || "Erro ao carregar dados");
             }
         } catch (error) {
-            openNotification?.("error", "top", "Erro", error.message);
+            openNotificationRef.current?.("error", "top", "Erro", error.message);
         } finally {
             setIsLoading(false);
         }
-    }, [pageSize, apiConfig, defaultSort, openNotification]);
+    }, []); // ← array vazio: fetchData nunca muda de referência
 
     const handleApplyFilters = (values) => {
         const processedValues = { ...values };
@@ -109,7 +137,10 @@ const DataTable = ({
         fetchData(1, {});
     };
 
-    useEffect(() => { fetchData(1, {}); }, [fetchData]);
+    // Carregar apenas uma vez ao montar
+    useEffect(() => {
+        fetchData(1, {});
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const activeFilterCount = Object.keys(activeFilters).filter(key => {
         const val = activeFilters[key];
@@ -132,6 +163,7 @@ const DataTable = ({
 
     return (
         <div className="flex flex-col h-full gap-3">
+            {/* Toolbar */}
             <div className="flex flex-wrap justify-between items-center bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 gap-3">
                 <div className="flex items-center gap-2 flex-wrap">
                     {filterFields.length > 0 && (
@@ -164,12 +196,18 @@ const DataTable = ({
                 </div>
             </div>
 
+            {/* Painel de filtros */}
             {showFilters && filterFields.length > 0 && (
                 <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-blue-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Filtros de pesquisa</p>
                     <Form form={formFilter} layout="inline" onFinish={handleApplyFilters} initialValues={activeFilters} className="flex flex-wrap gap-3 items-end">
                         {filterFields.map(field => (
-                            <Form.Item key={field.name} name={field.name} label={<span className="text-xs font-semibold text-slate-600">{field.label}</span>} className="mb-0">
+                            <Form.Item
+                                key={field.name}
+                                name={field.name}
+                                label={<span className="text-xs font-semibold text-slate-600">{field.label}</span>}
+                                className="mb-0"
+                            >
                                 {field.component || <Input placeholder={field.placeholder} size="middle" style={{ width: field.width || 180 }} />}
                             </Form.Item>
                         ))}
@@ -185,6 +223,7 @@ const DataTable = ({
                 </div>
             )}
 
+            {/* Tabela */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col min-h-0">
                 <div className="overflow-auto flex-1">
                     <table className="w-full text-left border-collapse min-w-max">
@@ -197,7 +236,7 @@ const DataTable = ({
                                             ${col.sticky ? 'sticky bg-slate-50 z-10 shadow-[1px_0_0_0_#e2e8f0]' : ''} ${col.className || ''}`}
                                         style={col.style}
                                     >
-                                        {col.title}
+                                        {typeof col.title === 'function' ? col.title() : col.title}
                                     </th>
                                 ))}
                                 {onRowEdit && (
@@ -259,6 +298,7 @@ const DataTable = ({
                     </table>
                 </div>
 
+                {/* Paginação */}
                 <div className="shrink-0 px-4 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-4">
                     <span className="text-[11px] text-slate-500 font-medium">
                         {total > 0
