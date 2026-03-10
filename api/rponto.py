@@ -75,7 +75,24 @@ tolerance = 0.45
 jitters = 1
 model = 'large'
 JUSTIFICACOES_BASE_PATH = "../justificacoes"
-PAUSA_ALMOCO_MIN = 45   
+
+def _get_justificacao_path(dep_codigo, num, filename):
+    """
+    Devolve o caminho completo do ficheiro de justificação organizado por
+    departamento e número de colaborador.
+
+    Estrutura: JUSTIFICACOES_BASE_PATH / dep_codigo / num / filename
+
+    Cria as pastas intermédias se não existirem (exist_ok=True).
+    """
+    dep_clean = str(dep_codigo or 'SEM_DEP').strip().replace('/', '_').replace('\\', '_')
+    num_clean  = str(num or 'SEM_NUM').strip().replace('/', '_').replace('\\', '_')
+
+    folder = os.path.join(JUSTIFICACOES_BASE_PATH, dep_clean, num_clean)
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, filename)
+
+PAUSA_ALMOCO_MIN = 45
 PAUSA_ALMOCO_MAX = 75 
 FERIAS_ESTADOS = {
 'pendente':             {'label': 'Pendente', 'cor': 'orange'},
@@ -3423,6 +3440,43 @@ def JustificacaoAprovar(request, format=None):
                 """, [novo_status_rh, num_aprovador, obs,
                       novo_status_global, justificacao_id])
 
+                # ── Mover ficheiro para a pasta organizada (se ainda estiver na raiz) ──
+                if acao == 'aprovar':
+                    try:
+                        with connections[connMssqlName].cursor() as cursor_f:
+                            cursor_f.execute("""
+                                SELECT pdf_path, pdf_filename, dep_codigo, num
+                                FROM rponto.dbo.justificacoes
+                                WHERE id = %s
+                            """, [justificacao_id])
+                            row_f = cursor_f.fetchone()
+
+                        if row_f and row_f[0] and row_f[1]:
+                            old_path    = row_f[0]
+                            pdf_fname   = row_f[1]
+                            dep_codigo_f = row_f[2]
+                            num_f        = row_f[3]
+
+                            # Só mover se o ficheiro existir e ainda estiver na raiz
+                            # (ou seja, o dirname do old_path == JUSTIFICACOES_BASE_PATH)
+                            old_dir = os.path.dirname(os.path.abspath(old_path))
+                            base_abs = os.path.abspath(JUSTIFICACOES_BASE_PATH)
+
+                            if os.path.exists(old_path) and old_dir == base_abs:
+                                new_path = _get_justificacao_path(dep_codigo_f, num_f, pdf_fname)
+                                if old_path != new_path:
+                                    shutil.move(old_path, new_path)
+                                    # Actualizar pdf_path na BD
+                                    with connections[connMssqlName].cursor() as cursor_upd:
+                                        cursor_upd.execute("""
+                                            UPDATE rponto.dbo.justificacoes
+                                            SET pdf_path = %s
+                                            WHERE id = %s
+                                        """, [new_path, justificacao_id])
+                    except Exception as e_move:
+                        # Não bloquear a aprovação por falha no move — apenas logar
+                        print(f"[JustificacaoAprovar] Aviso: não foi possível mover o ficheiro: {e_move}")
+
         return Response({"status": "success", "title": titulo})
 
     except Exception as e:
@@ -3802,16 +3856,25 @@ def UploadJustificacaoPDF(request):
                 "title": "Ficheiro demasiado grande. Máximo permitido: 10MB."
             })
 
-        # Criar pasta se não existir
-        try:
-            os.makedirs(JUSTIFICACOES_BASE_PATH, exist_ok=True)
-        except Exception:
-            pass
+        # Obter dep_codigo e num da justificação para organizar em pastas
+        dep_codigo_up = None
+        num_up        = None
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT dep_codigo, num
+                FROM rponto.dbo.justificacoes
+                WHERE id = %s
+            """, [justificacao_id])
+            row_dep = cursor.fetchone()
+            if row_dep:
+                dep_codigo_up, num_up = row_dep
 
         # Gerar nome único para o ficheiro
-        ext = os.path.splitext(pdf_file.name)[1].lower() or '.pdf'
+        ext      = os.path.splitext(pdf_file.name)[1].lower() or '.pdf'
         filename = f"just_{justificacao_id}_{uuid.uuid4().hex[:8]}{ext}"
-        filepath = os.path.join(JUSTIFICACOES_BASE_PATH, filename)
+
+        # Caminho organizado: justificacoes/<dep>/<num>/filename
+        filepath = _get_justificacao_path(dep_codigo_up, num_up, filename)
 
         # Guardar ficheiro
         with open(filepath, 'wb') as f:
