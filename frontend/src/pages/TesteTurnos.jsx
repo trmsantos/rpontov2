@@ -30,6 +30,7 @@ const HORAS_SIGLA = {
     REF: { inicio: '09:00', fim: '18:00' },
     DSC: { inicio: null,    fim: null    },
     FER: { inicio: null,    fim: null    },
+    JUS: { inicio: null,    fim: null    },
 };
 
 const resolverHoras = (sigla, hi, hf) => ({
@@ -39,13 +40,14 @@ const resolverHoras = (sigla, hi, hf) => ({
 
 // ── Configuração visual dos turnos ─────────────────────────────
 const TURNO_CFG = {
-    NOI: { bg: 'linear-gradient(135deg,#1e3a5f,#2d5a87)', light: '#EFF6FF', border: '#3B82F6', text: '#1E40AF', label: 'Noite',    hours: '00:00–08:00' },
-    MAN: { bg: 'linear-gradient(135deg,#059669,#10B981)', light: '#ECFDF5', border: '#10B981', text: '#047857', label: 'Manhã',    hours: '08:00–16:00' },
-    TAR: { bg: 'linear-gradient(135deg,#D97706,#F59E0B)', light: '#FEF3C7', border: '#F59E0B', text: '#B45309', label: 'Tarde',    hours: '16:00–00:00' },
-    GER: { bg: 'linear-gradient(135deg,#B45309,#F59E0B)', light: '#FFFBEB', border: '#F59E0B', text: '#92400E', label: 'Geral',    hours: '09:00–18:00' },
-    DSC: { bg: 'linear-gradient(135deg,#6B7280,#9CA3AF)', light: '#F3F4F6', border: '#D1D5DB', text: '#4B5563', label: 'Descanso', hours: null           },
-    REF: { bg: 'linear-gradient(135deg,#7C3AED,#8B5CF6)', light: '#F5F3FF', border: '#A78BFA', text: '#6D28D9', label: 'Reforço',  hours: '09:00–18:00'  },
-    FER: { bg: 'linear-gradient(135deg,#7C3AED,#9333EA)', light: '#FAF5FF', border: '#C084FC', text: '#7E22CE', label: 'Férias',   hours: null           },
+    NOI: { bg: 'linear-gradient(135deg,#1e3a5f,#2d5a87)', light: '#EFF6FF', border: '#3B82F6', text: '#1E40AF', label: 'Noite',       hours: '00:00–08:00' },
+    MAN: { bg: 'linear-gradient(135deg,#059669,#10B981)', light: '#ECFDF5', border: '#10B981', text: '#047857', label: 'Manhã',       hours: '08:00–16:00' },
+    TAR: { bg: 'linear-gradient(135deg,#D97706,#F59E0B)', light: '#FEF3C7', border: '#F59E0B', text: '#B45309', label: 'Tarde',       hours: '16:00–00:00' },
+    GER: { bg: 'linear-gradient(135deg,#B45309,#F59E0B)', light: '#FFFBEB', border: '#F59E0B', text: '#92400E', label: 'Geral',       hours: '09:00–18:00' },
+    DSC: { bg: 'linear-gradient(135deg,#6B7280,#9CA3AF)', light: '#F3F4F6', border: '#D1D5DB', text: '#4B5563', label: 'Descanso',    hours: null           },
+    REF: { bg: 'linear-gradient(135deg,#7C3AED,#8B5CF6)', light: '#F5F3FF', border: '#A78BFA', text: '#6D28D9', label: 'Reforço',    hours: '09:00–18:00'  },
+    FER: { bg: 'linear-gradient(135deg,#7C3AED,#9333EA)', light: '#FAF5FF', border: '#C084FC', text: '#7E22CE', label: 'Férias',      hours: null           },
+    JUS: { bg: 'linear-gradient(135deg,#0891B2,#06B6D4)', light: '#ECFEFF', border: '#67E8F9', text: '#0E7490', label: 'Justificado', hours: null           },
 };
 
 const EQUIPA_CFG = {
@@ -112,26 +114,25 @@ const groupByTurno = (arr) => {
 
 // ── Célula colaborador ─────────────────────────────────────────
 const CelulaDiaColab = ({ day, turnoInfo, isFds, isToday }) => {
-    // turnoInfo.is_ferias pode vir do backend (campo na equipa) OU
-    // ser injetado pelo renderCalendar quando a data está em ferias_datas
-    const isFer    = turnoInfo?.is_ferias === true || turnoInfo?.turno_sigla === 'FER';
-    const sigla    = isFer ? 'FER' : (turnoInfo?.turno_sigla || (isFds ? 'DSC' : null));
-    const isTroca  = turnoInfo?.is_troca === true;
-    const isDsc    = !sigla || sigla === 'DSC';
-
-    const cfg = TURNO_CFG[sigla] || TURNO_CFG.DSC;
+    const isFer   = turnoInfo?.is_ferias      === true || turnoInfo?.turno_sigla === 'FER';
+    const isJus   = turnoInfo?.is_justificado === true || turnoInfo?.turno_sigla === 'JUS';
+    const sigla   = isFer ? 'FER' : isJus ? 'JUS' : (turnoInfo?.turno_sigla || (isFds ? 'DSC' : null));
+    const isTroca = turnoInfo?.is_troca === true;
+    const isDsc   = !sigla || sigla === 'DSC';
+    const cfg     = TURNO_CFG[sigla] || TURNO_CFG.DSC;
 
     const { hora_inicio, hora_fim } = resolverHoras(
         sigla,
-        isFer ? null : turnoInfo?.hora_inicio,
-        isFer ? null : turnoInfo?.hora_fim
+        (isFer || isJus) ? null : turnoInfo?.hora_inicio,
+        (isFer || isJus) ? null : turnoInfo?.hora_fim
     );
 
     return (
         <div className={`min-h-[100px] sm:min-h-[120px] p-2 border transition-all
             ${isToday  ? 'ring-2 ring-indigo-500 bg-indigo-50 border-indigo-300'
-            : isFer    ? 'bg-purple-50 border-purple-200'
-            : isFds    ? 'bg-slate-50  border-gray-200'
+            : isFer    ? 'bg-purple-50  border-purple-200'
+            : isJus    ? 'bg-cyan-50    border-cyan-200'
+            : isFds    ? 'bg-slate-50   border-gray-200'
             : 'bg-white border-gray-200'}
             hover:shadow-md hover:z-10`}>
 
@@ -143,7 +144,7 @@ const CelulaDiaColab = ({ day, turnoInfo, isFds, isToday }) => {
                     </Badge>
                 ) : (
                     <span className={`text-sm sm:text-base font-bold
-                        ${isFds ? 'text-slate-400' : isFer ? 'text-purple-600' : 'text-slate-700'}`}>
+                        ${isFds ? 'text-slate-400' : isFer ? 'text-purple-600' : isJus ? 'text-cyan-600' : 'text-slate-700'}`}>
                         {day}
                     </span>
                 )}
@@ -158,6 +159,11 @@ const CelulaDiaColab = ({ day, turnoInfo, isFds, isToday }) => {
                             <span className="text-[8px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded font-bold">🌴 FÉR</span>
                         </Tooltip>
                     )}
+                    {isJus && !isFer && (
+                        <Tooltip title={turnoInfo?.motivo_justif || 'Falta justificada aprovada'}>
+                            <span className="text-[8px] bg-cyan-100 text-cyan-700 px-1 py-0.5 rounded font-bold">📄 JUST.</span>
+                        </Tooltip>
+                    )}
                 </div>
             </div>
 
@@ -167,6 +173,16 @@ const CelulaDiaColab = ({ day, turnoInfo, isFds, isToday }) => {
                     <div className="rounded-lg p-2 border border-purple-200 bg-purple-50 text-center">
                         <div className="text-lg leading-none mb-0.5">🌴</div>
                         <div className="text-[9px] font-bold text-purple-700">Férias</div>
+                    </div>
+                ) : isJus ? (
+                    <div className="rounded-lg p-2 border border-cyan-200 bg-cyan-50 text-center">
+                        <div className="text-lg leading-none mb-0.5">📄</div>
+                        <div className="text-[9px] font-bold text-cyan-700">Justificado</div>
+                        {turnoInfo?.motivo_justif && (
+                            <div className="text-[8px] text-cyan-500 mt-0.5 truncate leading-tight">
+                                {turnoInfo.motivo_justif}
+                            </div>
+                        )}
                     </div>
                 ) : !isDsc ? (
                     <div className="rounded-lg p-1.5 border"
@@ -313,27 +329,23 @@ export default function TurnosHorario() {
 
     const [loading,       setLoading]       = useState(false);
     const [escalasData,   setEscalasData]   = useState([]);
-    const [feriasDatas,   setFeriasDatas]   = useState(new Set()); // datas de férias aprovadas
+    const [feriasDatas,   setFeriasDatas]   = useState(new Set());
+    const [justifDatas,   setJustifDatas]   = useState(new Set());
     const [userInfo,      setUserInfo]      = useState(null);
     const [currentMonth,  setCurrentMonth]  = useState(dayjs());
     const [viewMode,      setViewMode]      = useState('geral');
     const [equipasFiltro, setEquipasFiltro] = useState(['A','B','C','D','E']);
 
-    // Resolver o número do colaborador — tenta todos os campos possíveis do auth
     const numColaborador = useMemo(() =>
         auth?.num || auth?.numero || auth?.nfunc || auth?.employee_id || null
     , [auth]);
 
-    // Resolver tp_hor — vem do auth diretamente (JWT) como fallback
     const tpHorAuth = useMemo(() =>
         auth?.tp_hor || auth?.CALENDARIO || ''
     , [auth]);
 
     const load = useCallback(async () => {
-        if (!numColaborador) {
-            console.warn('[TurnosHorario] sem numColaborador, auth:', auth);
-            return;
-        }
+        if (!numColaborador) return;
         setLoading(true);
         const start = currentMonth.startOf('month').format('YYYY-MM-DD');
         const end   = currentMonth.endOf('month').format('YYYY-MM-DD');
@@ -358,27 +370,36 @@ export default function TurnosHorario() {
             if (r?.data?.success || r?.data?.status === 'success') {
                 setEscalasData(r.data.escalas || []);
 
-                // ── Férias vindas do backend ────────────────────────────
-                // O backend inclui `ferias_datas` como array de strings "YYYY-MM-DD"
-                // quando o campo existe; senão percorremos as escalas à procura de is_ferias
+                // ── Férias ─────────────────────────────────���──────
                 if (Array.isArray(r.data.ferias_datas)) {
                     setFeriasDatas(new Set(r.data.ferias_datas));
                 } else {
-                    // fallback: extrair is_ferias das próprias escalas
                     const fSet = new Set();
                     (r.data.escalas || []).forEach(dia => {
-                        const todasFerias = (dia.equipas || []).some(e => e.is_ferias);
-                        const gerFerias   = (dia.ger     || []).some(g => g.is_ferias);
-                        if (todasFerias || gerFerias) fSet.add(dia.data);
+                        const ok = (dia.equipas || []).some(e => e.is_ferias) ||
+                                   (dia.ger     || []).some(g => g.is_ferias);
+                        if (ok) fSet.add(dia.data);
                     });
                     setFeriasDatas(fSet);
+                }
+
+                // ── Justificações ─────────────────────────────────
+                if (Array.isArray(r.data.justif_datas)) {
+                    setJustifDatas(new Set(r.data.justif_datas));
+                } else {
+                    const jSet = new Set();
+                    (r.data.escalas || []).forEach(dia => {
+                        const ok = (dia.equipas || []).some(e => e.is_justificado) ||
+                                   (dia.ger     || []).some(g => g.is_justificado);
+                        if (ok) jSet.add(dia.data);
+                    });
+                    setJustifDatas(jSet);
                 }
 
                 setUserInfo(r.data.user_info || {
                     role:       auth?.isRH    ? 'rh'
                             : auth?.isChefe ? 'chefe'
                             : 'colaborador',
-                    // Usar tp_hor do backend se disponível, senão do JWT
                     tp_hor:     r.data.user_info?.tp_hor || tpHorAuth,
                     dep:        auth?.dep        || '',
                     deps_chefe: auth?.deps_chefe || [],
@@ -399,10 +420,8 @@ export default function TurnosHorario() {
     const isRH    = role === 'rh';
     const isChefe = role === 'chefe';
     const isColab = role === 'colaborador';
-
-    // tp_hor: preferência ao backend, depois JWT
     const tpHor   = userInfo?.tp_hor || tpHorAuth || '';
-    const isGer      = isColab && tpHor === 'GER';
+    const isGer      = isColab && (tpHor === 'GER' || tpHor === 'REF');
     const isRotativo = isColab && ['A','B','C','D','E'].includes(tpHor);
 
     const escalasPorData = useMemo(() => {
@@ -434,12 +453,12 @@ export default function TurnosHorario() {
     // Resumo mensal do colaborador
     const resumo = useMemo(() => {
         if (!isColab) return null;
-        let trabalho = 0, ferias = 0, trocas = 0, folgas = 0;
+        let trabalho = 0, ferias = 0, trocas = 0, folgas = 0, justificados = 0;
         escalasData.forEach(dia => {
             if (dia.is_fds) return;
 
-            // Se o dia está marcado como férias (backend ou set local)
-            if (feriasDatas.has(dia.data)) { ferias++; return; }
+            if (feriasDatas.has(dia.data))  { ferias++;       return; }
+            if (justifDatas.has(dia.data))  { justificados++; return; }
 
             let item = null;
             if (isRotativo) {
@@ -451,12 +470,13 @@ export default function TurnosHorario() {
             if (!item) { folgas++; return; }
 
             const s = item.turno_sigla;
-            if (s === 'FER' || item.is_ferias) ferias++;
-            else if (s === 'DSC')              folgas++;
+            if (s === 'FER' || item.is_ferias)           ferias++;
+            else if (s === 'JUS' || item.is_justificado) justificados++;
+            else if (s === 'DSC')                        folgas++;
             else { trabalho++; if (item.is_troca) trocas++; }
         });
-        return { trabalho, ferias, trocas, folgas };
-    }, [escalasData, feriasDatas, isColab, isRotativo, isGer, tpHor]);
+        return { trabalho, ferias, trocas, folgas, justificados };
+    }, [escalasData, feriasDatas, justifDatas, isColab, isRotativo, isGer, tpHor]);
 
     const renderCalendar = () => {
         const startOfMonth = currentMonth.startOf('month');
@@ -482,8 +502,8 @@ export default function TurnosHorario() {
             const isoWd   = startOfMonth.date(day).isoWeekday();
             const isFds   = isoWd >= 6;
 
-            // Verificar se este dia tem férias aprovadas
-            const isDiaFerias = feriasDatas.has(dateStr);
+            const isDiaFerias      = feriasDatas.has(dateStr);
+            const isDiaJustificado = justifDatas.has(dateStr);
 
             const dayDataF = dayData ? {
                 ...dayData,
@@ -493,14 +513,29 @@ export default function TurnosHorario() {
             if (isColab) {
                 let turnoInfo = null;
 
-                // ── Férias têm prioridade absoluta ─────────────────────
                 if (isDiaFerias) {
+                    // Férias têm prioridade absoluta
                     turnoInfo = { turno_sigla: 'FER', is_ferias: true };
+
+                } else if (isDiaJustificado) {
+                    // Justificação aprovada sobrepõe turno normal
+                    let motivo = '';
+                    if (isGer) {
+                        const gerData = (dayData?.ger || []).find(g => g.num === numColaborador) || (dayData?.ger || [])[0];
+                        motivo = gerData?.motivo_justif || '';
+                    } else if (isRotativo) {
+                        const eq = (dayData?.equipas || []).find(e => e.equipa === tpHor);
+                        motivo = eq?.motivo_justif || '';
+                    }
+                    turnoInfo = {
+                        turno_sigla:    'JUS',
+                        is_justificado: true,
+                        motivo_justif:  motivo,
+                    };
+
                 } else if (isGer) {
-                    // GER: procura o item pelo num do colaborador
                     const gerData = (dayData?.ger || []).find(g => g.num === numColaborador)
                                  || (dayData?.ger || [])[0];
-
                     if (gerData) {
                         if (gerData.is_ferias) {
                             turnoInfo = { turno_sigla: 'FER', is_ferias: true };
@@ -513,22 +548,19 @@ export default function TurnosHorario() {
                             turnoInfo = { ...gerData, hora_inicio, hora_fim };
                         }
                     } else {
-                        // Sem dados para este dia — se for fim de semana é DSC, senão GER padrão
                         turnoInfo = isFds
                             ? { turno_sigla: 'DSC' }
                             : {
-                                turno_sigla: 'GER',
+                                turno_sigla: tpHor,
                                 hora_inicio: '09:00',
                                 hora_fim:    '18:00',
                                 almoco_ini:  '13:00',
-                                almoco_fim:  '14:00'
+                                almoco_fim:  '14:00',
                               };
                     }
 
                 } else if (isRotativo) {
-                    // Rotativo: procura a equipa correta
                     const equipaData = (dayData?.equipas || []).find(e => e.equipa === tpHor);
-
                     if (equipaData) {
                         if (equipaData.is_ferias) {
                             turnoInfo = { turno_sigla: 'FER', is_ferias: true };
@@ -541,7 +573,6 @@ export default function TurnosHorario() {
                             turnoInfo = { ...equipaData, hora_inicio, hora_fim };
                         }
                     } else {
-                        // Sem dados no ciclo para este dia = folga/descanso
                         turnoInfo = { turno_sigla: 'DSC' };
                     }
                 } else {
@@ -657,10 +688,11 @@ export default function TurnosHorario() {
                                     {resumo && (
                                         <div className="flex flex-wrap gap-2 mt-2">
                                             {[
-                                                { label: 'Trabalho', value: resumo.trabalho, color: '#059669', bg: '#ECFDF5' },
-                                                { label: 'Férias',   value: resumo.ferias,   color: '#7E22CE', bg: '#FAF5FF' },
-                                                { label: 'Trocas',   value: resumo.trocas,   color: '#2563EB', bg: '#EFF6FF' },
-                                                { label: 'Folgas',   value: resumo.folgas,   color: '#6B7280', bg: '#F3F4F6' },
+                                                { label: 'Trabalho',     value: resumo.trabalho,     color: '#059669', bg: '#ECFDF5' },
+                                                { label: 'Férias',       value: resumo.ferias,       color: '#7E22CE', bg: '#FAF5FF' },
+                                                { label: 'Justificados', value: resumo.justificados, color: '#0E7490', bg: '#ECFEFF' },
+                                                { label: 'Trocas',       value: resumo.trocas,       color: '#2563EB', bg: '#EFF6FF' },
+                                                { label: 'Folgas',       value: resumo.folgas,       color: '#6B7280', bg: '#F3F4F6' },
                                             ].map(item => (
                                                 <div key={item.label}
                                                      style={{ background: item.bg }}
@@ -681,7 +713,18 @@ export default function TurnosHorario() {
                                         <div className="flex items-center gap-1.5 text-xs text-slate-500"><ClockCircleOutlined className="text-amber-400" /><span>Entrada: <strong>09:00</strong> (±15 min)</span></div>
                                         <div className="flex items-center gap-1.5 text-xs text-slate-500"><CoffeeOutlined className="text-amber-400" /><span>Almoço: <strong>13:00–14:00</strong></span></div>
                                         <div className="flex items-center gap-1.5 text-xs text-slate-500"><ClockCircleOutlined className="text-red-400" /><span>Saída: <strong>18:00</strong></span></div>
-                                        {resumo && <span className="text-xs text-purple-600 font-semibold">· {resumo.ferias} dias férias</span>}
+                                        {resumo && (
+                                            <div className="flex flex-wrap gap-2 ml-2">
+                                                {[
+                                                    { label: 'Férias',       value: resumo.ferias,       color: '#7E22CE' },
+                                                    { label: 'Justificados', value: resumo.justificados, color: '#0E7490' },
+                                                ].map(item => (
+                                                    <span key={item.label} style={{ color: item.color }} className="text-xs font-semibold">
+                                                        · {item.value} {item.label.toLowerCase()}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}

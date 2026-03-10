@@ -3289,25 +3289,52 @@ def JustificacaoCreate(request, format=None):
         return Response({"status": "error", "title": str(e)})
 
 
-# ================================================================
-# 3. JustificacaoAprovar
-#    Chefe ou RH aprova/rejeita uma justificação
-# ================================================================
+
 def JustificacaoAprovar(request, format=None):
     try:
-        filter_data = request.data.get('filter', {})
+        filter_data     = request.data.get('filter', {})
         parameters_data = request.data.get('parameters', {})
 
         justificacao_id = filter_data.get('id')
-        acao = filter_data.get('acao')          # 'aprovar' ou 'rejeitar'
-        obs = filter_data.get('obs', '')
-        num_aprovador = filter_data.get('num_aprovador')
-        tipo_aprovador = filter_data.get('tipo')  # 'chefe' ou 'rh'
+        acao            = filter_data.get('acao', '').strip()
+        obs             = filter_data.get('obs', '') or ''
+        tipo_aprovador  = (filter_data.get('tipo') or '').strip()
 
-        if not all([justificacao_id, acao, num_aprovador, tipo_aprovador]):
+        # ── num_aprovador: aceitar vários campos e fallback para o utilizador autenticado ──
+        num_aprovador = (
+            filter_data.get('num_aprovador')
+            or filter_data.get('num')
+            or filter_data.get('_num')
+            or ''
+        )
+        num_aprovador = str(num_aprovador).strip()
+
+        # Se ainda estiver vazio, tenta extrair do utilizador autenticado (sessão Django)
+        if not num_aprovador and hasattr(request, 'user') and request.user.is_authenticated:
+            num_aprovador = getattr(request.user, 'username', '') or ''
+
+        # ── Validar campos obrigatórios com mensagens específicas ──
+        erros = []
+        if not justificacao_id:
+            erros.append('id')
+        if not acao:
+            erros.append('acao')
+        if not num_aprovador:
+            erros.append('num_aprovador')
+        if not tipo_aprovador:
+            erros.append('tipo')
+
+        if erros:
             return Response({
                 "status": "error",
-                "title": "Campos obrigatórios em falta: id, acao, num_aprovador, tipo"
+                "title":  f"Campos obrigatórios em falta: {', '.join(erros)}",
+                "debug":  {
+                    "id":            justificacao_id,
+                    "acao":          acao,
+                    "num_aprovador": num_aprovador,
+                    "tipo":          tipo_aprovador,
+                    "filter_keys":   list(filter_data.keys()),
+                }
             })
 
         if acao not in ['aprovar', 'rejeitar']:
@@ -3317,7 +3344,7 @@ def JustificacaoAprovar(request, format=None):
             return Response({"status": "error", "title": "Tipo inválido. Use 'chefe' ou 'rh'."})
 
         with connections[connMssqlName].cursor() as cursor:
-            # Verificar estado atual
+            # Verificar estado actual
             cursor.execute("""
                 SELECT id, status, status_chefe, dep_codigo
                 FROM rponto.dbo.justificacoes
@@ -3330,28 +3357,27 @@ def JustificacaoAprovar(request, format=None):
 
             jid, status_atual, status_chefe_atual, dep_codigo = row
 
-            # ── Chefe a aprovar/rejeitar ──
+            # ── Chefe a aprovar/rejeitar ──────────────────────────────
             if tipo_aprovador == 'chefe':
                 if status_atual != 0:
                     return Response({
                         "status": "error",
-                        "title": "Esta justificação já foi processada pelo chefe."
+                        "title":  "Esta justificação já foi processada pelo chefe."
                     })
 
-                # Verificar se o aprovador é realmente chefe deste dep
                 deps_do_chefe = _get_deps_do_chefe(num_aprovador)
                 if dep_codigo and dep_codigo not in deps_do_chefe:
                     return Response({
                         "status": "error",
-                        "title": "Não tem permissão para aprovar justificações deste departamento."
+                        "title":  "Não tem permissão para aprovar justificações deste departamento."
                     })
 
                 if acao == 'aprovar':
-                    novo_status_chefe = 1
+                    novo_status_chefe  = 1
                     novo_status_global = 1  # Aguarda RH
                     titulo = "Aprovado pelo Chefe de Departamento. Aguarda aprovação do RH."
                 else:
-                    novo_status_chefe = 2
+                    novo_status_chefe  = 2
                     novo_status_global = 3  # Rejeitado pelo chefe
                     titulo = "Rejeitado pelo Chefe de Departamento."
 
@@ -3366,20 +3392,23 @@ def JustificacaoAprovar(request, format=None):
                 """, [novo_status_chefe, num_aprovador, obs,
                       novo_status_global, justificacao_id])
 
-            # ── RH a aprovar/rejeitar ──
+            # ── RH a aprovar/rejeitar ─────────────────────────────────
             elif tipo_aprovador == 'rh':
-                if status_atual != 1:
+                # RH pode aprovar qualquer justificação que não tenha sido
+                # rejeitada ou já concluída (status 0=pendente, 1=aguarda RH)
+                if status_atual in (2, 3, 4):
+                    labels = {2: 'já aprovada', 3: 'rejeitada pelo chefe', 4: 'já rejeitada pelo RH'}
                     return Response({
                         "status": "error",
-                        "title": "Esta justificação ainda não foi aprovada pelo chefe ou já foi processada."
+                        "title":  f"Esta justificação está {labels.get(status_atual, 'já processada')}."
                     })
 
                 if acao == 'aprovar':
-                    novo_status_rh = 1
+                    novo_status_rh     = 1
                     novo_status_global = 2  # Aprovado final
                     titulo = "Aprovado pelo RH. Processo concluído."
                 else:
-                    novo_status_rh = 2
+                    novo_status_rh     = 2
                     novo_status_global = 4  # Rejeitado pelo RH
                     titulo = "Rejeitado pelo RH."
 
@@ -3401,10 +3430,6 @@ def JustificacaoAprovar(request, format=None):
         return Response({"status": "error", "title": str(e)})
 
 
-# ================================================================
-# 4. JustificacaoMotivos
-#    Lista motivos disponíveis (para dropdown no frontend)
-# ================================================================
 def JustificacaoMotivos(request, format=None):
     try:
         with connections[connMssqlName].cursor() as cursor:
@@ -3423,10 +3448,7 @@ def JustificacaoMotivos(request, format=None):
         return Response({"status": "error", "title": str(e)})
 
 
-# ================================================================
-# 5. DepartamentosList
-#    Lista departamentos (para gestão RH)
-# ================================================================
+
 def DepartamentosList(request, format=None):
     try:
         with connections[connMssqlName].cursor() as cursor:
@@ -5546,6 +5568,8 @@ def GetTurnosColaborador(request, format=None):
             proximo_mes  = (dt_inicio.replace(day=28) + timedelta(days=4)).replace(day=1)
             data_fim_str = (proximo_mes - timedelta(days=1)).strftime('%Y-%m-%d')
 
+        dt_fim = datetime.strptime(data_fim_str, '%Y-%m-%d')
+
         # ── Papel do utilizador ────────────────────────────────────
         num_auth   = (filter_data.get('num') or '').strip()
         is_rh      = bool(filter_data.get('isRH',    False))
@@ -5578,7 +5602,7 @@ def GetTurnosColaborador(request, format=None):
               f"isRH={is_rh} isChefe={is_chefe} deps_chefe={deps_chefe}")
 
         # ══════════════════════════════════════════════════════════
-        # FÉRIAS APROVADAS — vista pessoal
+        # FÉRIAS APROVADAS — vista pessoal (apenas colaborador)
         # ══════════════════════════════════════════════════════════
         ferias_colab = set()
         if num_auth and not is_rh and not is_admin and not is_chefe:
@@ -5588,8 +5612,8 @@ def GetTurnosColaborador(request, format=None):
                         CONVERT(VARCHAR(10), data_ini, 23),
                         CONVERT(VARCHAR(10), data_fim, 23)
                     FROM rponto.dbo.ferias_pedidos
-                    WHERE num    = %s
-                      AND estado = 'aprovado_rh'
+                    WHERE num      = %s
+                      AND estado   = 'aprovado_rh'
                       AND data_fim  >= %s
                       AND data_ini  <= %s
                 """, [num_auth, data_inicio_str, data_fim_str])
@@ -5605,12 +5629,12 @@ def GetTurnosColaborador(request, format=None):
                         pass
 
         # ══════════════════════════════════════════════════════════
-        # TROCAS APROVADAS — vista pessoal
+        # TROCAS APROVADAS — vista pessoal (apenas colaborador)
         # ══════════════════════════════════════════════════════════
         trocas_colab = {}  # data_str -> novo_turno_sigla
         if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
-                # Como requerente: na data_req fica com turno_dest,
+                # Como REQUERENTE: na data_req fica com turno_dest,
                 #                  na data_dest fica com turno_req
                 cursor.execute("""
                     SELECT
@@ -5629,7 +5653,8 @@ def GetTurnosColaborador(request, format=None):
                     if dr: trocas_colab[dr] = tdest
                     if dd: trocas_colab[dd] = treq
 
-                # Como destino
+                # Como DESTINO: na data_dest fica com turno_req,
+                #               na data_req  fica com turno_dest
                 cursor.execute("""
                     SELECT
                         CONVERT(VARCHAR(10), data_req,  23),
@@ -5648,344 +5673,282 @@ def GetTurnosColaborador(request, format=None):
                     if dr: trocas_colab[dr] = tdest
 
         # ══════════════════════════════════════════════════════════
-        # CARREGAR INFO DE TODOS OS TURNOS (cache)
+        # JUSTIFICAÇÕES APROVADAS (status=2) — vista pessoal
         # ══════════════════════════════════════════════════════════
-        turno_cache = {}
-        with connections[connMssqlName].cursor() as cursor:
-            cursor.execute("""
-                SELECT sigla, nome,
-                       CONVERT(VARCHAR(5), hora_inicio, 108),
-                       CONVERT(VARCHAR(5), hora_fim,    108),
-                       cor_hex, tipo
-                FROM rponto.dbo.turnos
-            """)
-            for row in cursor.fetchall():
-                turno_cache[row[0]] = {
-                    'nome':        row[1],
-                    'hora_inicio': row[2],
-                    'hora_fim':    row[3],
-                    'cor_hex':     row[4] or '#94a3b8',
-                    'tipo':        row[5],
-                }
-
-        # ══════════════════════════════════════════════════════════
-        # DETERMINAR EQUIPAS + ESQUEMAS A CARREGAR
-        # ══════════════════════════════════════════════════════════
-        #
-        # Regras:
-        #   RH/Admin   → todas as equipas, TODOS os esquemas (vista geral)
-        #   Chefe       → equipas do(s) dep(s), esquemas do(s) dep(s)
-        #   Colaborador → só a sua equipa, só o seu esquema
-        #
-        # Estrutura de consulta:
-        #   lista de (equipa, esquema) pares a carregar
-
-        if is_rh or is_admin:
-            # Pegar todos os pares (equipa, esquema) distintos existentes
+        justif_colab = {}  # data_str -> { motivo, descricao }
+        if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute("""
-                    SELECT DISTINCT equipa_letra, esquema_tipo
-                    FROM rponto.dbo.ciclo_laboracao
-                    ORDER BY equipa_letra, esquema_tipo
-                """)
-                pares_eq_esq = [(r[0], r[1]) for r in cursor.fetchall()]
-
-        elif is_chefe:
-            # Para cada dep do chefe, descobrir as equipas e esquemas
-            pares_eq_esq = []
-            if deps_chefe:
-                with connections[connMssqlName].cursor() as cursor:
-                    placeholders = ','.join(['%s'] * len(deps_chefe))
-                    cursor.execute(f"""
-                        SELECT DISTINCT
-                            RTRIM(LTRIM(tp_hor)) AS equipa
-                        FROM rponto.dbo.time_registration
-                        WHERE RTRIM(LTRIM(dep)) IN ({placeholders})
-                          AND tp_hor IN {str(EQUIPAS_ROTATIVAS).replace(',)', ')')}
-                    """, deps_chefe)
-                    equipas_chefe = [r[0] for r in cursor.fetchall()]
-
-                # Para cada equipa do chefe, determinar os esquemas dos seus deps
-                esquemas_chefe = list({
-                    _dep_to_esquema(d) for d in deps_chefe
-                })
-
-                with connections[connMssqlName].cursor() as cursor:
-                    if equipas_chefe and esquemas_chefe:
-                        eq_ph  = ','.join(["'%s'" % e for e in equipas_chefe])
-                        esq_ph = ','.join(["'%s'" % e for e in esquemas_chefe])
-                        cursor.execute(f"""
-                            SELECT DISTINCT equipa_letra, esquema_tipo
-                            FROM rponto.dbo.ciclo_laboracao
-                            WHERE equipa_letra IN ({eq_ph})
-                              AND esquema_tipo  IN ({esq_ph})
-                            ORDER BY equipa_letra, esquema_tipo
-                        """)
-                        pares_eq_esq = [(r[0], r[1]) for r in cursor.fetchall()]
-
-        else:
-            # Colaborador normal
-            if tp_hor_auth in EQUIPAS_ROTATIVAS:
-                esquema_colab = _dep_to_esquema(dep_auth)
-                # Verificar se existe exactamente este par na BD
-                with connections[connMssqlName].cursor() as cursor:
-                    cursor.execute("""
-                        SELECT TOP 1 equipa_letra, esquema_tipo
-                        FROM rponto.dbo.ciclo_laboracao
-                        WHERE equipa_letra = %s AND esquema_tipo = %s
-                    """, [tp_hor_auth, esquema_colab])
-                    row = cursor.fetchone()
-                    if row:
-                        pares_eq_esq = [(tp_hor_auth, esquema_colab)]
-                    else:
-                        # Fallback: primeiro esquema disponível para esta equipa
-                        cursor.execute("""
-                            SELECT TOP 1 equipa_letra, esquema_tipo
-                            FROM rponto.dbo.ciclo_laboracao
-                            WHERE equipa_letra = %s
-                            ORDER BY esquema_tipo
-                        """, [tp_hor_auth])
-                        row2 = cursor.fetchone()
-                        pares_eq_esq = [(tp_hor_auth, row2[1])] if row2 else []
-            else:
-                pares_eq_esq = []
-
-        # ══════════════════════════════════════════════════════════
-        # CARREGAR O CICLO — uma query por par (equipa, esquema)
-        # ou uma query única filtrando IN com AND por par
-        # ══════════════════════════════════════════════════════════
-        # escalas_rotativos: { data_str: [ {equipa, esquema, turno_sigla, ...} ] }
-        escalas_rotativos = {}
-
-        if pares_eq_esq:
-            # Construir um filtro WHERE eficiente:
-            # WHERE (equipa_letra = 'A' AND esquema_tipo = 'Laboracao_Continua')
-            #    OR (equipa_letra = 'B' AND esquema_tipo = 'Laboracao_Continua')
-            #    OR (equipa_letra = 'B' AND esquema_tipo = 'Armazem')
-            #    ...
-            par_conditions = " OR ".join([
-                f"(c.equipa_letra = '{eq}' AND c.esquema_tipo = '{esq}')"
-                for eq, esq in pares_eq_esq
-            ])
-
-            query_ciclo = f"""
-                SET DATEFIRST 1;
-                SELECT
-                    FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'),
-                           'yyyy-MM-dd')                       AS data,
-                    c.equipa_letra                             AS equipa,
-                    c.esquema_tipo                             AS esquema,
-                    c.turno_sigla,
-                    COALESCE(t.nome, c.turno_sigla)            AS turno_nome,
-                    CONVERT(VARCHAR(5), t.hora_inicio, 108)    AS hora_inicio,
-                    CONVERT(VARCHAR(5), t.hora_fim,    108)    AS hora_fim,
-                    ISNULL(t.cor_hex, '#94a3b8')               AS cor_hex,
-                    CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0
-                    END                                        AS is_feriado,
-                    h.name                                     AS nome_feriado
-                FROM rponto.dbo.ciclo_laboracao c
-                LEFT JOIN rponto.dbo.turnos t
-                    ON t.sigla = c.turno_sigla
-                LEFT JOIN rponto.dbo.holidays h
-                    ON h.holiday_date =
-                       DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
-                WHERE DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
-                        BETWEEN '{data_inicio_str}' AND '{data_fim_str}'
-                  AND ({par_conditions})
-                ORDER BY data, c.equipa_letra, c.esquema_tipo
-            """
-
-            with connections[connMssqlName].cursor() as cursor:
-                cursor.execute(query_ciclo)
-                cols_ciclo = [c[0] for c in cursor.description]
+                    SELECT
+                        CONVERT(VARCHAR(10), J.dt_inicio, 23) AS dt_inicio,
+                        CONVERT(VARCHAR(10), J.dt_fim,    23) AS dt_fim,
+                        COALESCE(M.descricao, J.motivo_codigo) AS motivo,
+                        J.descricao
+                    FROM rponto.dbo.justificacoes J
+                    LEFT JOIN rponto.dbo.justificacoes_motivos M
+                        ON J.motivo_codigo = M.codigo
+                    WHERE J.num    = %s
+                      AND J.status = 2
+                      AND J.dt_fim    >= %s
+                      AND J.dt_inicio <= %s
+                """, [num_auth, data_inicio_str, data_fim_str])
                 for row in cursor.fetchall():
-                    r = dict(zip(cols_ciclo, row))
-                    d = r['data']
-                    if d not in escalas_rotativos:
-                        escalas_rotativos[d] = []
-                    escalas_rotativos[d].append({
-                        'equipa':       r['equipa'],
-                        'esquema':      r['esquema'],
-                        'turno_sigla':  r['turno_sigla'],
-                        'turno_nome':   r['turno_nome'],
-                        'hora_inicio':  r['hora_inicio'],
-                        'hora_fim':     r['hora_fim'],
-                        'cor_hex':      r['cor_hex'],
-                        'is_feriado':   bool(r['is_feriado']),
-                        'nome_feriado': r['nome_feriado'],
-                        'is_troca':     False,
-                        'is_ferias':    False,
-                    })
+                    try:
+                        fi = datetime.strptime(row[0][:10], '%Y-%m-%d').date()
+                        ff = datetime.strptime(row[1][:10], '%Y-%m-%d').date()
+                        c  = fi
+                        while c <= ff:
+                            justif_colab[c.isoformat()] = {
+                                'motivo':    row[2] or '',
+                                'descricao': row[3] or '',
+                            }
+                            c += timedelta(days=1)
+                    except Exception:
+                        pass
 
         # ══════════════════════════════════════════════════════════
-        # COLABORADORES GER (horário geral fixo)
+        # ESCALAS — lógica por papel
         # ══════════════════════════════════════════════════════════
-        colaboradores_ger = []
 
-        carregar_ger = (
-            is_rh or is_admin or is_chefe
-            or (not is_rh and not is_admin and not is_chefe
-                and tp_hor_auth not in EQUIPAS_ROTATIVAS)
-        )
+        if is_rh or is_admin or is_chefe:
+            # ── Vista RH/Chefe: todas as equipas + GER ─────────────
+            escalas_agrupadas = {}
+            dt_current = dt_inicio
+            while dt_current <= dt_fim:
+                data_str = dt_current.strftime('%Y-%m-%d')
+                isowd    = dt_current.isoweekday()
+                escalas_agrupadas[data_str] = {
+                    'data':       data_str,
+                    'dia_semana': dt_current.strftime('%A'),
+                    'is_fds':     isowd >= 6,
+                    'equipas':    [],
+                    'ger':        [],
+                }
+                dt_current += timedelta(days=1)
 
-        if carregar_ger:
-            where_ger  = ["RTRIM(LTRIM(tr.tp_hor)) NOT IN ('A','B','C','D','E')"]
-            params_ger = []
+            # Equipas rotativas
+            with connections[connMssqlName].cursor() as cursor:
+                cursor.execute(f"""
+                    SET DATEFIRST 1;
+                    SELECT
+                        FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'), 'yyyy-MM-dd') AS data,
+                        c.equipa_letra  AS equipa,
+                        c.esquema_tipo  AS esquema,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 'DSC' ELSE c.turno_sigla END AS turno_sigla,
+                        COALESCE(t.nome, 'Sem turno') AS turno_nome,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_inicio END AS hora_inicio,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_fim    END AS hora_fim,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN '#E0E0E0' ELSE t.cor_hex END AS cor_hex,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0 END AS is_feriado,
+                        h.name AS nome_feriado
+                    FROM rponto.dbo.ciclo_laboracao c
+                    LEFT JOIN rponto.dbo.turnos t ON t.sigla = c.turno_sigla
+                    LEFT JOIN rponto.dbo.holidays h
+                        ON h.holiday_date = DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
+                    WHERE DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') >= '{data_inicio_str}'
+                      AND DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') <= '{data_fim_str}'
+                    ORDER BY c.ordem_rotacao, c.esquema_tipo, c.equipa_letra
+                """)
+                cols = [col[0] for col in cursor.description]
+                for row in cursor.fetchall():
+                    r   = dict(zip(cols, row))
+                    dat = r['data']
+                    if dat in escalas_agrupadas:
+                        escalas_agrupadas[dat]['equipas'].append({
+                            'equipa':      r['equipa'],
+                            'esquema':     r['esquema'],
+                            'turno_sigla': r['turno_sigla'],
+                            'turno_nome':  r['turno_nome'],
+                            'hora_inicio': str(r['hora_inicio']) if r['hora_inicio'] else None,
+                            'hora_fim':    str(r['hora_fim'])    if r['hora_fim']    else None,
+                            'cor_hex':     r['cor_hex'],
+                            'is_feriado':  bool(r['is_feriado']),
+                            'nome_feriado': r['nome_feriado'],
+                        })
 
-            if not is_rh and not is_admin and not is_chefe and num_auth:
-                where_ger.append("tr.num = %s")
-                params_ger.append(num_auth)
-            elif deps_chefe:
-                placeholders = ','.join(['%s'] * len(deps_chefe))
-                where_ger.append(f"RTRIM(LTRIM(tr.dep)) IN ({placeholders})")
-                params_ger.extend(deps_chefe)
-            # RH/Admin: sem restrição por dep
+            # Colaboradores GER
+            dep_filter_sql = ''
+            dep_params     = []
+            if is_chefe and not is_rh and deps_chefe:
+                placeholders   = ', '.join(['%s'] * len(deps_chefe))
+                dep_filter_sql = f"AND RTRIM(LTRIM(TR.dep)) IN ({placeholders})"
+                dep_params     = [d.strip() for d in deps_chefe]
 
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute(f"""
                     SELECT DISTINCT
-                        tr.num,
-                        RTRIM(LTRIM(tr.dep))    AS dep,
-                        RTRIM(LTRIM(tr.tp_hor)) AS tp_hor
-                    FROM rponto.dbo.time_registration tr
-                    WHERE {' AND '.join(where_ger)}
-                """, params_ger)
-                cols_ger = [c[0] for c in cursor.description]
-                colaboradores_ger = [dict(zip(cols_ger, r))
-                                     for r in cursor.fetchall()]
+                        CONVERT(VARCHAR(10), TR.dts, 23) AS data,
+                        TR.num,
+                        RTRIM(LTRIM(TR.tp_hor)) AS tp_hor,
+                        RTRIM(LTRIM(TR.dep))    AS dep
+                    FROM rponto.dbo.time_registration TR
+                    WHERE TR.tp_hor IN ('GER','REF')
+                      AND TR.dts BETWEEN %s AND %s
+                      {dep_filter_sql}
+                """, [data_inicio_str, data_fim_str] + dep_params)
+                cols_ger = [col[0] for col in cursor.description]
+                for row in cursor.fetchall():
+                    r   = dict(zip(cols_ger, row))
+                    dat = r['data']
+                    if dat in escalas_agrupadas:
+                        escalas_agrupadas[dat]['ger'].append({
+                            'num':         r['num'],
+                            'tp_hor':      r['tp_hor'],
+                            'dep':         r['dep'],
+                            'turno_sigla': r['tp_hor'],
+                            'hora_inicio': '09:00',
+                            'hora_fim':    '18:00',
+                        })
 
-        # Obter nomes dos colaboradores GER via SAGE
-        nums_ger  = [c['num'] for c in colaboradores_ger]
-        nomes_ger = {}
-        if nums_ger:
-            try:
-                nomes_ger = _get_nomes_colaboradores(nums_ger)
-            except Exception:
-                pass
-        for c in colaboradores_ger:
-            c['nome'] = nomes_ger.get(c['num'], {}).get('nome', '')
+            escalas_lista = list(escalas_agrupadas.values())
+
+            return Response({
+                'status':      'success',
+                'success':     True,
+                'escalas':     escalas_lista,
+                'ferias_datas': [],
+                'justif_datas': [],
+                'user_info': {
+                    'role':       'rh' if is_rh or is_admin else 'chefe',
+                    'tp_hor':     tp_hor_auth or '',
+                    'dep':        dep_auth    or '',
+                    'deps_chefe': deps_chefe,
+                    'num':        num_auth,
+                }
+            })
 
         # ══════════════════════════════════════════════════════════
-        # MONTAR CALENDÁRIO DIA A DIA
+        # Vista COLABORADOR
         # ══════════════════════════════════════════════════════════
-        nomes_dia = ['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo']
+        escalas_agrupadas = {}
         dt_current = dt_inicio
-        dt_end     = datetime.strptime(data_fim_str, '%Y-%m-%d')
-        escalas    = []
-
-        while dt_current <= dt_end:
-            data_str    = dt_current.strftime('%Y-%m-%d')
-            iso_weekday = dt_current.isoweekday()   # 1=Seg ... 7=Dom
-            is_fds      = iso_weekday >= 6
-
-            dia_obj = {
-                'data':        data_str,
-                'dia_semana':  nomes_dia[dt_current.weekday()],
-                'iso_weekday': iso_weekday,
-                'is_fds':      is_fds,
-                # equipas: lista de turnos rotativos para esta data
-                # (pode ter múltiplos esquemas/equipas na vista geral)
-                'equipas':     list(escalas_rotativos.get(data_str, [])),
-                # ger: lista de colaboradores com horário geral
-                'ger':         [],
-                'tem_ferias':  False,
-                'tem_troca':   False,
+        while dt_current <= dt_fim:
+            data_str = dt_current.strftime('%Y-%m-%d')
+            isowd    = dt_current.isoweekday()
+            escalas_agrupadas[data_str] = {
+                'data':       data_str,
+                'dia_semana': dt_current.strftime('%A'),
+                'is_fds':     isowd >= 6,
+                'equipas':    [],
+                'ger':        [],
             }
-
-            # GER — turno calculado pelo dia da semana
-            for colab in colaboradores_ger:
-                turno_sigla = 'GER' if iso_weekday <= 5 else 'DSC'
-                ti          = turno_cache.get(turno_sigla, {})
-                dia_obj['ger'].append({
-                    'num':         colab['num'],
-                    'nome':        colab.get('nome', ''),
-                    'dep':         colab['dep'],
-                    'turno_sigla': turno_sigla,
-                    'turno_nome':  ti.get('nome', 'Geral' if iso_weekday <= 5 else 'Descanso'),
-                    'hora_inicio': ti.get('hora_inicio') if iso_weekday <= 5 else None,
-                    'hora_fim':    ti.get('hora_fim')    if iso_weekday <= 5 else None,
-                    'cor_hex':     ti.get('cor_hex', '#F59E0B') if iso_weekday <= 5 else '#DC2626',
-                    'is_troca':    False,
-                    'is_ferias':   False,
-                })
-
-            # ── OVERRIDE FÉRIAS (só vista pessoal) ────────────────
-            if data_str in ferias_colab:
-                dia_obj['tem_ferias'] = True
-                for eq in dia_obj['equipas']:
-                    eq['turno_sigla_original'] = eq['turno_sigla']
-                    eq['turno_nome_original']  = eq['turno_nome']
-                    eq['turno_sigla'] = 'FER'
-                    eq['turno_nome']  = 'Férias'
-                    eq['cor_hex']     = '#9333EA'
-                    eq['is_ferias']   = True
-                for g in dia_obj['ger']:
-                    g['turno_sigla_original'] = g['turno_sigla']
-                    g['turno_sigla'] = 'FER'
-                    g['turno_nome']  = 'Férias'
-                    g['cor_hex']     = '#9333EA'
-                    g['is_ferias']   = True
-
-            # ── OVERRIDE TROCAS (só vista pessoal) ────────────────
-            if data_str in trocas_colab:
-                dia_obj['tem_troca']     = True
-                novo_sigla               = trocas_colab[data_str]
-                info_novo                = turno_cache.get(novo_sigla, {})
-                for eq in dia_obj['equipas']:
-                    if not eq.get('is_ferias'):
-                        eq['turno_sigla_original'] = eq['turno_sigla']
-                        eq['turno_sigla'] = novo_sigla
-                        eq['turno_nome']  = info_novo.get('nome', novo_sigla)
-                        eq['hora_inicio'] = info_novo.get('hora_inicio')
-                        eq['hora_fim']    = info_novo.get('hora_fim')
-                        eq['cor_hex']     = info_novo.get('cor_hex', '#94a3b8')
-                        eq['is_troca']    = True
-                for g in dia_obj['ger']:
-                    if not g.get('is_ferias'):
-                        g['turno_sigla_original'] = g['turno_sigla']
-                        g['turno_sigla'] = novo_sigla
-                        g['turno_nome']  = info_novo.get('nome', novo_sigla)
-                        g['hora_inicio'] = info_novo.get('hora_inicio')
-                        g['hora_fim']    = info_novo.get('hora_fim')
-                        g['cor_hex']     = info_novo.get('cor_hex', '#94a3b8')
-                        g['is_troca']    = True
-
-            escalas.append(dia_obj)
             dt_current += timedelta(days=1)
 
-        # ── Metadados do utilizador ────────────────────────────────
-        user_info = {
-            'num':          num_auth,
-            'tp_hor':       tp_hor_auth,
-            'dep':          dep_auth,
-            'esquema':      _dep_to_esquema(dep_auth) if dep_auth else ESQUEMA_DEFAULT,
-            'pares_carregados': pares_eq_esq,
-            'is_rh':        is_rh,
-            'is_admin':     is_admin,
-            'is_chefe':     is_chefe,
-            'deps_chefe':   deps_chefe,
-            'role':         ('rh' if (is_rh or is_admin)
-                             else 'chefe' if is_chefe
-                             else 'colaborador'),
-        }
+        if tp_hor_auth in ('A', 'B', 'C', 'D', 'E'):
+            # Rotativo
+            with connections[connMssqlName].cursor() as cursor:
+                cursor.execute(f"""
+                    SET DATEFIRST 1;
+                    SELECT
+                        FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'), 'yyyy-MM-dd') AS data,
+                        c.equipa_letra AS equipa,
+                        c.esquema_tipo AS esquema,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 'DSC' ELSE c.turno_sigla END AS turno_sigla,
+                        COALESCE(t.nome,'Sem turno') AS turno_nome,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_inicio END AS hora_inicio,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_fim    END AS hora_fim,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN '#E0E0E0' ELSE t.cor_hex END AS cor_hex,
+                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0 END AS is_feriado,
+                        h.name AS nome_feriado
+                    FROM rponto.dbo.ciclo_laboracao c
+                    LEFT JOIN rponto.dbo.turnos t ON t.sigla = c.turno_sigla
+                    LEFT JOIN rponto.dbo.holidays h
+                        ON h.holiday_date = DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
+                    WHERE c.equipa_letra = %s
+                      AND DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') >= '{data_inicio_str}'
+                      AND DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') <= '{data_fim_str}'
+                    ORDER BY c.ordem_rotacao
+                """, [tp_hor_auth])
+                cols = [col[0] for col in cursor.description]
+                for row in cursor.fetchall():
+                    r   = dict(zip(cols, row))
+                    dat = r['data']
+                    if dat in escalas_agrupadas:
+                        # Verificar troca aprovada para este dia
+                        turno_efetivo = trocas_colab.get(dat, r['turno_sigla'])
+                        is_troca      = dat in trocas_colab
+                        escalas_agrupadas[dat]['equipas'].append({
+                            'equipa':      r['equipa'],
+                            'esquema':     r['esquema'],
+                            'turno_sigla': turno_efetivo,
+                            'turno_nome':  r['turno_nome'],
+                            'hora_inicio': str(r['hora_inicio']) if r['hora_inicio'] else None,
+                            'hora_fim':    str(r['hora_fim'])    if r['hora_fim']    else None,
+                            'cor_hex':     r['cor_hex'],
+                            'is_feriado':  bool(r['is_feriado']),
+                            'nome_feriado': r['nome_feriado'],
+                            'is_troca':    is_troca,
+                            'is_ferias':   dat in ferias_colab,
+                        })
 
-        print(f"[GetTurnos] OK escalas={len(escalas)} "
-              f"pares={pares_eq_esq} ferias={len(ferias_colab)} "
-              f"trocas={len(trocas_colab)} ger={len(colaboradores_ger)}")
+        elif tp_hor_auth in ('GER', 'REF'):
+            # Horário fixo
+            dt_current = dt_inicio
+            while dt_current <= dt_fim:
+                data_str = dt_current.strftime('%Y-%m-%d')
+                isowd    = dt_current.isoweekday()
+                is_fds   = isowd >= 6
+                turno_efetivo = trocas_colab.get(data_str, tp_hor_auth if not is_fds else 'DSC')
+                is_troca      = data_str in trocas_colab
+                escalas_agrupadas[data_str]['ger'].append({
+                    'num':         num_auth,
+                    'tp_hor':      tp_hor_auth,
+                    'dep':         dep_auth or '',
+                    'turno_sigla': turno_efetivo,
+                    'hora_inicio': '09:00' if not is_fds else None,
+                    'hora_fim':    '18:00' if not is_fds else None,
+                    'almoco_ini':  '13:00' if not is_fds else None,
+                    'almoco_fim':  '14:00' if not is_fds else None,
+                    'is_troca':    is_troca,
+                    'is_ferias':   data_str in ferias_colab,
+                })
+                dt_current += timedelta(days=1)
+
+        escalas_lista = list(escalas_agrupadas.values())
+
+        # ── Injetar férias e justificações (sobrepõem turno) ───────
+        for dia in escalas_lista:
+            data_str = dia['data']
+
+            if data_str in ferias_colab:
+                for eq in dia.get('equipas', []):
+                    eq['is_ferias']   = True
+                    eq['turno_sigla'] = 'FER'
+                for g in dia.get('ger', []):
+                    g['is_ferias']   = True
+                    g['turno_sigla'] = 'FER'
+
+            if data_str in justif_colab:
+                j = justif_colab[data_str]
+                for eq in dia.get('equipas', []):
+                    if not eq.get('is_ferias'):
+                        eq['is_justificado']   = True
+                        eq['motivo_justif']    = j['motivo']
+                        eq['descricao_justif'] = j['descricao']
+                for g in dia.get('ger', []):
+                    if not g.get('is_ferias'):
+                        g['is_justificado']   = True
+                        g['motivo_justif']    = j['motivo']
+                        g['descricao_justif'] = j['descricao']
 
         return Response({
-            'success':     True,
-            'data_inicio': data_inicio_str,
-            'data_fim':    data_fim_str,
-            'total_dias':  len(escalas),
-            'escalas':     escalas,
-            'user_info':   user_info,
+            'status':       'success',
+            'success':      True,
+            'escalas':      escalas_lista,
+            'ferias_datas': sorted(list(ferias_colab)),
+            'justif_datas': sorted(list(justif_colab.keys())),
+            'user_info': {
+                'role':       'colaborador',
+                'tp_hor':     tp_hor_auth or '',
+                'dep':        dep_auth    or '',
+                'deps_chefe': [],
+                'num':        num_auth,
+            }
         })
 
     except Exception as e:
         traceback.print_exc()
-        return Response({'success': False, 'error': str(e)}, status=500)
-
+        return Response({'status': 'error', 'error': str(e), 'success': False})
 
 
 

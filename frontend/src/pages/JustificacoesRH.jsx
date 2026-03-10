@@ -37,12 +37,28 @@ const DetalheRHDrawer = ({ item, open, onClose, onRefresh }) => {
 
     if (!item) return null;
 
+    // Resolver o num do aprovador — tentar todos os campos possíveis do auth
+    const numAprovador = (
+        auth?.num
+        || auth?.numero
+        || auth?.nfunc
+        || auth?.employee_id
+        || auth?.username
+        || ''
+    );
+
     const handleAcao = async (acao) => {
         const obs = form.getFieldValue('obs') || '';
         if (acao === 'rejeitar' && !obs.trim()) {
             openNotification('warning', 'top', 'Atenção', 'Indique o motivo da rejeição.');
             return;
         }
+
+        if (!numAprovador) {
+            openNotification('error', 'top', 'Erro', 'Não foi possível identificar o utilizador. Por favor refresque a página e tente novamente.');
+            return;
+        }
+
         submitting.trigger();
         try {
             const res = await fetchPost({
@@ -50,11 +66,11 @@ const DetalheRHDrawer = ({ item, open, onClose, onRefresh }) => {
                 withCredentials: true,
                 parameters: { method: "JustificacaoAprovar" },
                 filter: {
-                    id: item.id,
+                    id:            item.id,
                     acao,
                     obs,
-                    num_aprovador: auth.num,
-                    tipo: 'rh'
+                    num_aprovador: numAprovador,
+                    tipo:          'rh'
                 }
             });
             if (res.data.status === 'success') {
@@ -78,7 +94,7 @@ const DetalheRHDrawer = ({ item, open, onClose, onRefresh }) => {
         window.open(`${API_URL}/rponto/justificacao/pdf/${item.id}/?token=${token}`, '_blank');
     };
 
-    const podeAprovar = item.status === 1;
+    const podeAprovar = item.status === 1 || item.status === 0; // RH pode aprovar em qualquer estado não final
 
     return (
         <Drawer
@@ -114,8 +130,7 @@ const DetalheRHDrawer = ({ item, open, onClose, onRefresh }) => {
                             size="large"
                             onClick={() => handleAcao('aprovar')}
                             loading={submitting.state}
-                            className="rounded-xl bg-green-600 hover:bg-green-700
-                                       border-none font-semibold"
+                            className="rounded-xl bg-green-600 hover:bg-green-700 border-none font-semibold"
                         >
                             Aprovar
                         </Button>
@@ -326,7 +341,7 @@ const JustificacoesTable = ({ rows, loading, onOpen }) => {
     );
 };
 
-// ── Componente Principal ───────────────────────────────────────
+
 export default function JustificacoesRH() {
     const { auth } = useContext(AppContext);
     const { openNotification } = useContext(LayoutContext);

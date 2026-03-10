@@ -180,7 +180,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                             Justificações
                         </MenuItem>
                         {/* Trocas de turno — APENAS chefe do DPROD, visível na Área Pessoal */}
-                        {temAcessoTrocas && (
+{/*                         {temAcessoTrocas && (
                             <MenuItem
                                 onClick={() => handleNavigation('/app/rh/trocas-turno')}
                                 icon={ArrowLeftRight}
@@ -188,7 +188,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                             >
                                 Trocas de Turno
                             </MenuItem>
-                        )}
+                        )} */}
                     </MenuSection>
 
                     {/* ── Recursos Humanos ── */}

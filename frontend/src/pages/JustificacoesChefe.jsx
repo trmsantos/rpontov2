@@ -37,7 +37,20 @@ const DetalheDrawer = ({ item, open, onClose, onRefresh }) => {
 
     if (!item) return null;
 
+    const numAprovador = (
+        auth?.num
+        || auth?.numero
+        || auth?.nfunc
+        || auth?.employee_id
+        || auth?.username
+        || ''
+    );
+
     const handleAprovar = async () => {
+        if (!numAprovador) {
+            openNotification('error', 'top', 'Erro', 'Não foi possível identificar o utilizador. Por favor refresque a página e tente novamente.');
+            return;
+        }
         submitting.trigger();
         try {
             const obs = form.getFieldValue('obs') || '';
@@ -45,7 +58,13 @@ const DetalheDrawer = ({ item, open, onClose, onRefresh }) => {
                 url: `${API_URL}/rponto/sqlp/`,
                 withCredentials: true,
                 parameters: { method: "JustificacaoAprovar" },
-                filter: { id: item.id, acao: 'aprovar', obs, num_aprovador: auth.num, tipo: 'chefe' }
+                filter: {
+                    id:            item.id,
+                    acao:          'aprovar',
+                    obs,
+                    num_aprovador: numAprovador,
+                    tipo:          'chefe'
+                }
             });
             if (res.data.status === 'success') {
                 openNotification('success', 'top', 'Aprovado', res.data.title);
@@ -67,13 +86,23 @@ const DetalheDrawer = ({ item, open, onClose, onRefresh }) => {
             openNotification('warning', 'top', 'Atenção', 'Indique o motivo da rejeição.');
             return;
         }
+        if (!numAprovador) {
+            openNotification('error', 'top', 'Erro', 'Não foi possível identificar o utilizador. Por favor refresque a página e tente novamente.');
+            return;
+        }
         submitting.trigger();
         try {
             const res = await fetchPost({
                 url: `${API_URL}/rponto/sqlp/`,
                 withCredentials: true,
                 parameters: { method: "JustificacaoAprovar" },
-                filter: { id: item.id, acao: 'rejeitar', obs, num_aprovador: auth.num, tipo: 'chefe' }
+                filter: {
+                    id:            item.id,
+                    acao:          'rejeitar',
+                    obs,
+                    num_aprovador: numAprovador,
+                    tipo:          'chefe'
+                }
             });
             if (res.data.status === 'success') {
                 openNotification('success', 'top', 'Rejeitado', res.data.title);
@@ -87,11 +116,6 @@ const DetalheDrawer = ({ item, open, onClose, onRefresh }) => {
         } finally {
             submitting.end();
         }
-    };
-
-    const handleViewPDF = () => {
-        const token = JSON.parse(localStorage.getItem('auth'))?.access_token;
-        window.open(`${API_URL}/rponto/justificacao/pdf/${item.id}/?token=${token}`, '_blank');
     };
 
     const isPendente = item.status === 0;
