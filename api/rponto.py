@@ -57,6 +57,7 @@ import threading
 import shutil
 import uuid
 import json
+from .authentication import QueryParamJWTAuthentication
 
 connGatewayName = "postgres"
 connMssqlName = "sqlserver"
@@ -4082,7 +4083,7 @@ def UploadJustificacaoPDF(request):
 # ================================================================
 # ENDPOINT DEDICADO: Download/Visualização de PDF
 @api_view(['GET'])
-@renderer_classes([JSONRenderer])
+@authentication_classes([QueryParamJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def DownloadJustificacaoPDF(request, justificacao_id):
     try:
@@ -5870,11 +5871,9 @@ def GetTurnosColaborador(request, format=None):
         # ══════════════════════════════════════════════════════════
         # TROCAS APROVADAS — vista pessoal (apenas colaborador)
         # ══════════════════════════════════════════════════════════
-        trocas_colab = {}  # data_str -> novo_turno_sigla
+        trocas_colab = {}
         if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
-                # Como REQUERENTE: na data_req fica com turno_dest,
-                #                  na data_dest fica com turno_req
                 cursor.execute("""
                     SELECT
                         CONVERT(VARCHAR(10), data_req,  23),
@@ -5892,8 +5891,6 @@ def GetTurnosColaborador(request, format=None):
                     if dr: trocas_colab[dr] = tdest
                     if dd: trocas_colab[dd] = treq
 
-                # Como DESTINO: na data_dest fica com turno_req,
-                #               na data_req  fica com turno_dest
                 cursor.execute("""
                     SELECT
                         CONVERT(VARCHAR(10), data_req,  23),
@@ -5914,7 +5911,7 @@ def GetTurnosColaborador(request, format=None):
         # ══════════════════════════════════════════════════════════
         # JUSTIFICAÇÕES APROVADAS (status=2) — vista pessoal
         # ══════════════════════════════════════════════════════════
-        justif_colab = {}  # data_str -> { motivo, descricao }
+        justif_colab = {}
         if num_auth and not is_rh and not is_admin and not is_chefe:
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute("""
@@ -5946,11 +5943,9 @@ def GetTurnosColaborador(request, format=None):
                         pass
 
         # ══════════════════════════════════════════════════════════
-        # ESCALAS — lógica por papel
+        # VISTA RH / ADMIN / CHEFE
         # ══════════════════════════════════════════════════════════
-
         if is_rh or is_admin or is_chefe:
-            # ── Vista RH/Chefe: todas as equipas + GER ─────────────
             escalas_agrupadas = {}
             dt_current = dt_inicio
             while dt_current <= dt_fim:
@@ -5965,79 +5960,279 @@ def GetTurnosColaborador(request, format=None):
                 }
                 dt_current += timedelta(days=1)
 
-            # Equipas rotativas
-            with connections[connMssqlName].cursor() as cursor:
-                cursor.execute(f"""
-                    SET DATEFIRST 1;
-                    SELECT
-                        FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'), 'yyyy-MM-dd') AS data,
-                        c.equipa_letra  AS equipa,
-                        c.esquema_tipo  AS esquema,
-                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 'DSC' ELSE c.turno_sigla END AS turno_sigla,
-                        COALESCE(t.nome, 'Sem turno') AS turno_nome,
-                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_inicio END AS hora_inicio,
-                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_fim    END AS hora_fim,
-                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN '#E0E0E0' ELSE t.cor_hex END AS cor_hex,
-                        CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0 END AS is_feriado,
-                        h.name AS nome_feriado
-                    FROM rponto.dbo.ciclo_laboracao c
-                    LEFT JOIN rponto.dbo.turnos t ON t.sigla = c.turno_sigla
-                    LEFT JOIN rponto.dbo.holidays h
-                        ON h.holiday_date = DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
-                    WHERE DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') >= '{data_inicio_str}'
-                      AND DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') <= '{data_fim_str}'
-                    ORDER BY c.ordem_rotacao, c.esquema_tipo, c.equipa_letra
-                """)
-                cols = [col[0] for col in cursor.description]
-                for row in cursor.fetchall():
-                    r   = dict(zip(cols, row))
-                    dat = r['data']
-                    if dat in escalas_agrupadas:
-                        escalas_agrupadas[dat]['equipas'].append({
-                            'equipa':      r['equipa'],
-                            'esquema':     r['esquema'],
-                            'turno_sigla': r['turno_sigla'],
-                            'turno_nome':  r['turno_nome'],
-                            'hora_inicio': str(r['hora_inicio']) if r['hora_inicio'] else None,
-                            'hora_fim':    str(r['hora_fim'])    if r['hora_fim']    else None,
-                            'cor_hex':     r['cor_hex'],
-                            'is_feriado':  bool(r['is_feriado']),
-                            'nome_feriado': r['nome_feriado'],
+            is_chefe_only = is_chefe and not is_rh and not is_admin
+
+            # ══════════════════════════════════════════════════════
+            # CHEFE: descobrir colaboradores do departamento
+            # (queries NÃO dependem do mês pedido — usam dados
+            #  mais recentes para funcionar em qualquer mês)
+            # ══════════════════════════════════════════════════════
+            chefe_equipas    = set()
+            chefe_colabs_ger = []
+
+            if is_chefe_only and deps_chefe:
+                placeholders     = ', '.join(['%s'] * len(deps_chefe))
+                dep_params_clean = [d.strip() for d in deps_chefe]
+
+                with connections[connMssqlName].cursor() as cursor:
+                    # Equipas rotativas no dep (últimos 3 meses, não depende do mês pedido)
+                    cursor.execute(f"""
+                        SELECT DISTINCT RTRIM(LTRIM(tp_hor)) AS equipa
+                        FROM rponto.dbo.time_registration
+                        WHERE RTRIM(LTRIM(dep)) IN ({placeholders})
+                          AND tp_hor IN ('A','B','C','D','E')
+                          AND dts >= DATEADD(MONTH, -3, GETDATE())
+                    """, dep_params_clean)
+                    for row in cursor.fetchall():
+                        if row[0]:
+                            chefe_equipas.add(row[0].strip())
+
+                    # Colaboradores GER/REF no dep — registo mais recente de cada
+                    # (independente do mês pedido)
+                    cursor.execute(f"""
+                        SELECT
+                            sub.num,
+                            sub.tp_hor,
+                            sub.dep
+                        FROM (
+                            SELECT
+                                RTRIM(LTRIM(TR.num))    AS num,
+                                RTRIM(LTRIM(TR.tp_hor)) AS tp_hor,
+                                RTRIM(LTRIM(TR.dep))    AS dep,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY TR.num
+                                    ORDER BY TR.dts DESC
+                                ) AS rn
+                            FROM rponto.dbo.time_registration TR
+                            WHERE RTRIM(LTRIM(TR.dep)) IN ({placeholders})
+                              AND TR.tp_hor IN ('GER','REF')
+                        ) sub
+                        WHERE sub.rn = 1
+                    """, dep_params_clean)
+                    for row in cursor.fetchall():
+                        chefe_colabs_ger.append({
+                            'num':    row[0],
+                            'tp_hor': row[1],
+                            'dep':    row[2],
                         })
 
-            # Colaboradores GER
-            dep_filter_sql = ''
-            dep_params     = []
-            if is_chefe and not is_rh and deps_chefe:
-                placeholders   = ', '.join(['%s'] * len(deps_chefe))
-                dep_filter_sql = f"AND RTRIM(LTRIM(TR.dep)) IN ({placeholders})"
-                dep_params     = [d.strip() for d in deps_chefe]
+                print(f"[GetTurnos] Chefe deps={deps_chefe} "
+                      f"equipas_rotativas={chefe_equipas} "
+                      f"colabs_ger={[c['num'] for c in chefe_colabs_ger]}")
 
-            with connections[connMssqlName].cursor() as cursor:
-                cursor.execute(f"""
-                    SELECT DISTINCT
-                        CONVERT(VARCHAR(10), TR.dts, 23) AS data,
-                        TR.num,
-                        RTRIM(LTRIM(TR.tp_hor)) AS tp_hor,
-                        RTRIM(LTRIM(TR.dep))    AS dep
-                    FROM rponto.dbo.time_registration TR
-                    WHERE TR.tp_hor IN ('GER','REF')
-                      AND TR.dts BETWEEN %s AND %s
-                      {dep_filter_sql}
-                """, [data_inicio_str, data_fim_str] + dep_params)
-                cols_ger = [col[0] for col in cursor.description]
-                for row in cursor.fetchall():
-                    r   = dict(zip(cols_ger, row))
-                    dat = r['data']
-                    if dat in escalas_agrupadas:
-                        escalas_agrupadas[dat]['ger'].append({
-                            'num':         r['num'],
-                            'tp_hor':      r['tp_hor'],
-                            'dep':         r['dep'],
-                            'turno_sigla': r['tp_hor'],
-                            'hora_inicio': '09:00',
-                            'hora_fim':    '18:00',
+            # ════════════════��═════════════════════════════════════
+            # EQUIPAS ROTATIVAS
+            # ══════════════════════════════════════════════════════
+            carregar_equipas = True
+            if is_chefe_only and not chefe_equipas:
+                carregar_equipas = False
+
+            if carregar_equipas:
+                equipa_filter_sql = ''
+                equipa_params     = []
+                if is_chefe_only and chefe_equipas:
+                    ph                = ', '.join(['%s'] * len(chefe_equipas))
+                    equipa_filter_sql = f"AND c.equipa_letra IN ({ph})"
+                    equipa_params     = list(chefe_equipas)
+
+                with connections[connMssqlName].cursor() as cursor:
+                    cursor.execute(f"""
+                        SET DATEFIRST 1;
+                        SELECT
+                            FORMAT(DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01'), 'yyyy-MM-dd') AS data,
+                            c.equipa_letra  AS equipa,
+                            c.esquema_tipo  AS esquema,
+                            CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 'DSC' ELSE c.turno_sigla END AS turno_sigla,
+                            COALESCE(t.nome, 'Sem turno') AS turno_nome,
+                            CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_inicio END AS hora_inicio,
+                            CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN NULL ELSE t.hora_fim    END AS hora_fim,
+                            CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN '#E0E0E0' ELSE t.cor_hex END AS cor_hex,
+                            CASE WHEN c.ordem_rotacao IN (1,358,359,365) THEN 1 ELSE 0 END AS is_feriado,
+                            h.name AS nome_feriado
+                        FROM rponto.dbo.ciclo_laboracao c
+                        LEFT JOIN rponto.dbo.turnos t ON t.sigla = c.turno_sigla
+                        LEFT JOIN rponto.dbo.holidays h
+                            ON h.holiday_date = DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01')
+                        WHERE DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') >= '{data_inicio_str}'
+                          AND DATEADD(DAY, c.ordem_rotacao - 1, '2026-01-01') <= '{data_fim_str}'
+                          {equipa_filter_sql}
+                        ORDER BY c.ordem_rotacao, c.esquema_tipo, c.equipa_letra
+                    """, equipa_params)
+                    cols = [col[0] for col in cursor.description]
+                    for row in cursor.fetchall():
+                        r   = dict(zip(cols, row))
+                        dat = r['data']
+                        if dat in escalas_agrupadas:
+                            escalas_agrupadas[dat]['equipas'].append({
+                                'equipa':       r['equipa'],
+                                'esquema':      r['esquema'],
+                                'turno_sigla':  r['turno_sigla'],
+                                'turno_nome':   r['turno_nome'],
+                                'hora_inicio':  str(r['hora_inicio']) if r['hora_inicio'] else None,
+                                'hora_fim':     str(r['hora_fim'])    if r['hora_fim']    else None,
+                                'cor_hex':      r['cor_hex'],
+                                'is_feriado':   bool(r['is_feriado']),
+                                'nome_feriado': r['nome_feriado'],
+                            })
+
+            # ══════════════════════════════════════════════════════
+            # COLABORADORES GER/REF
+            # ══════════════════════════════════════════════════════
+            if is_chefe_only and chefe_colabs_ger:
+                # ── Chefe: gerar TODOS os dias do mês para cada
+                #    colaborador GER do departamento
+                #    (NÃO depende de picagens existirem)
+
+                nums_dep = [c['num'] for c in chefe_colabs_ger]
+
+                # Férias aprovadas dos colaboradores do dep
+                dep_ferias = {}
+                if nums_dep:
+                    with connections[connMssqlName].cursor() as cursor:
+                        ph = ', '.join(['%s'] * len(nums_dep))
+                        cursor.execute(f"""
+                            SELECT
+                                num,
+                                CONVERT(VARCHAR(10), data_ini, 23) AS di,
+                                CONVERT(VARCHAR(10), data_fim, 23) AS df
+                            FROM rponto.dbo.ferias_pedidos
+                            WHERE num IN ({ph})
+                              AND estado   = 'aprovado_rh'
+                              AND data_fim  >= %s
+                              AND data_ini  <= %s
+                        """, nums_dep + [data_inicio_str, data_fim_str])
+                        for row in cursor.fetchall():
+                            n = row[0]
+                            if n not in dep_ferias:
+                                dep_ferias[n] = set()
+                            try:
+                                fi = datetime.strptime(row[1][:10], '%Y-%m-%d').date()
+                                ff = datetime.strptime(row[2][:10], '%Y-%m-%d').date()
+                                c  = fi
+                                while c <= ff:
+                                    dep_ferias[n].add(c.isoformat())
+                                    c += timedelta(days=1)
+                            except Exception:
+                                pass
+
+                # Justificações aprovadas dos colaboradores do dep
+                dep_justif = {}
+                if nums_dep:
+                    with connections[connMssqlName].cursor() as cursor:
+                        ph = ', '.join(['%s'] * len(nums_dep))
+                        cursor.execute(f"""
+                            SELECT
+                                J.num,
+                                CONVERT(VARCHAR(10), J.dt_inicio, 23) AS di,
+                                CONVERT(VARCHAR(10), J.dt_fim,    23) AS df,
+                                COALESCE(M.descricao, J.motivo_codigo) AS motivo
+                            FROM rponto.dbo.justificacoes J
+                            LEFT JOIN rponto.dbo.justificacoes_motivos M
+                                ON J.motivo_codigo = M.codigo
+                            WHERE J.num IN ({ph})
+                              AND J.status = 2
+                              AND J.dt_fim    >= %s
+                              AND J.dt_inicio <= %s
+                        """, nums_dep + [data_inicio_str, data_fim_str])
+                        for row in cursor.fetchall():
+                            n = row[0]
+                            if n not in dep_justif:
+                                dep_justif[n] = {}
+                            try:
+                                fi = datetime.strptime(row[1][:10], '%Y-%m-%d').date()
+                                ff = datetime.strptime(row[2][:10], '%Y-%m-%d').date()
+                                c  = fi
+                                while c <= ff:
+                                    dep_justif[n][c.isoformat()] = row[3] or ''
+                                    c += timedelta(days=1)
+                            except Exception:
+                                pass
+
+                # Feriados no período
+                dep_feriados = set()
+                with connections[connMssqlName].cursor() as cursor:
+                    cursor.execute("""
+                        SELECT CONVERT(VARCHAR(10), holiday_date, 23)
+                        FROM rponto.dbo.holidays
+                        WHERE holiday_date BETWEEN %s AND %s
+                    """, [data_inicio_str, data_fim_str])
+                    for row in cursor.fetchall():
+                        if row[0]:
+                            dep_feriados.add(row[0])
+
+                # Gerar horário para cada colaborador em cada dia
+                for colab in chefe_colabs_ger:
+                    colab_ferias = dep_ferias.get(colab['num'], set())
+                    colab_justif = dep_justif.get(colab['num'], {})
+
+                    dt_current = dt_inicio
+                    while dt_current <= dt_fim:
+                        data_str = dt_current.strftime('%Y-%m-%d')
+                        isowd    = dt_current.isoweekday()
+                        is_fds   = isowd >= 6
+                        is_feriado = data_str in dep_feriados
+
+                        is_ferias      = data_str in colab_ferias
+                        is_justificado = data_str in colab_justif
+                        motivo_justif  = colab_justif.get(data_str, '')
+
+                        if is_ferias:
+                            turno_sigla = 'FER'
+                            hi, hf = None, None
+                        elif is_justificado:
+                            turno_sigla = 'JUS'
+                            hi, hf = None, None
+                        elif is_fds or is_feriado:
+                            turno_sigla = 'DSC'
+                            hi, hf = None, None
+                        else:
+                            turno_sigla = colab['tp_hor']
+                            hi, hf = '09:00', '18:00'
+
+                        escalas_agrupadas[data_str]['ger'].append({
+                            'num':            colab['num'],
+                            'tp_hor':         colab['tp_hor'],
+                            'dep':            colab['dep'],
+                            'turno_sigla':    turno_sigla,
+                            'hora_inicio':    hi,
+                            'hora_fim':       hf,
+                            'is_ferias':      is_ferias,
+                            'is_justificado': is_justificado,
+                            'motivo_justif':  motivo_justif,
+                            'is_feriado':     is_feriado,
                         })
+                        dt_current += timedelta(days=1)
+
+            else:
+                # ── RH/Admin: carregar GER da time_registration ────
+                dep_filter_sql = ''
+                dep_params     = []
+
+                with connections[connMssqlName].cursor() as cursor:
+                    cursor.execute(f"""
+                        SELECT DISTINCT
+                            CONVERT(VARCHAR(10), TR.dts, 23) AS data,
+                            TR.num,
+                            RTRIM(LTRIM(TR.tp_hor)) AS tp_hor,
+                            RTRIM(LTRIM(TR.dep))    AS dep
+                        FROM rponto.dbo.time_registration TR
+                        WHERE TR.tp_hor IN ('GER','REF')
+                          AND TR.dts BETWEEN %s AND %s
+                          {dep_filter_sql}
+                    """, [data_inicio_str, data_fim_str] + dep_params)
+                    cols_ger = [col[0] for col in cursor.description]
+                    for row in cursor.fetchall():
+                        r   = dict(zip(cols_ger, row))
+                        dat = r['data']
+                        if dat in escalas_agrupadas:
+                            escalas_agrupadas[dat]['ger'].append({
+                                'num':         r['num'],
+                                'tp_hor':      r['tp_hor'],
+                                'dep':         r['dep'],
+                                'turno_sigla': r['tp_hor'],
+                                'hora_inicio': '09:00',
+                                'hora_fim':    '18:00',
+                            })
 
             escalas_lista = list(escalas_agrupadas.values())
 
@@ -6057,7 +6252,7 @@ def GetTurnosColaborador(request, format=None):
             })
 
         # ══════════════════════════════════════════════════════════
-        # Vista COLABORADOR
+        # VISTA COLABORADOR
         # ══════════════════════════════════════════════════════════
         escalas_agrupadas = {}
         dt_current = dt_inicio
@@ -6074,7 +6269,6 @@ def GetTurnosColaborador(request, format=None):
             dt_current += timedelta(days=1)
 
         if tp_hor_auth in ('A', 'B', 'C', 'D', 'E'):
-            # Rotativo
             with connections[connMssqlName].cursor() as cursor:
                 cursor.execute(f"""
                     SET DATEFIRST 1;
@@ -6103,7 +6297,6 @@ def GetTurnosColaborador(request, format=None):
                     r   = dict(zip(cols, row))
                     dat = r['data']
                     if dat in escalas_agrupadas:
-                        # Verificar troca aprovada para este dia
                         turno_efetivo = trocas_colab.get(dat, r['turno_sigla'])
                         is_troca      = dat in trocas_colab
                         escalas_agrupadas[dat]['equipas'].append({
@@ -6121,7 +6314,6 @@ def GetTurnosColaborador(request, format=None):
                         })
 
         elif tp_hor_auth in ('GER', 'REF'):
-            # Horário fixo
             dt_current = dt_inicio
             while dt_current <= dt_fim:
                 data_str = dt_current.strftime('%Y-%m-%d')
