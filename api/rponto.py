@@ -74,7 +74,7 @@ cropped_faces_base_path = 'cropped_faces'
 tolerance = 0.45
 jitters = 1
 model = 'large'
-JUSTIFICACOES_BASE_PATH = "../justificacoes"
+JUSTIFICACOES_BASE_PATH = "justificacoes"
 PAUSA_ALMOCO_MIN = 45   
 PAUSA_ALMOCO_MAX = 75 
 FERIAS_ESTADOS = {
@@ -84,6 +84,14 @@ FERIAS_ESTADOS = {
     'aprovado_rh':      {'label': 'Aprovado por RH',    'cor': 'green'},
     'rejeitado_rh':     {'label': 'Rejeitado por RH',   'cor': 'red'},
 }
+
+def _get_justificacao_path(dep_codigo, num, filename):
+    dep_clean = str(dep_codigo or 'SEM_DEP').strip().replace('/', '_').replace('\\', '_')
+    num_clean  = str(num or 'SEM_NUM').strip().replace('/', '_').replace('\\', '_')
+
+    folder = os.path.join(JUSTIFICACOES_BASE_PATH, dep_clean, num_clean)
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, filename)
 
 
 def filterMulti(data, parameters, forceWhere=True, overrideWhere=False, encloseColumns=True, logicOperator="and"):
@@ -2029,31 +2037,6 @@ def format_fnum_filter(fnum_filter):
 
 #region FUNÇÕES PARA AJUSTE DE TURNO NOTURNO
 
-def _extract_date_str(dts):
-    if isinstance(dts, str):
-        return dts.split(' ')[0] if ' ' in dts else dts[:10]
-    elif isinstance(dts, datetime):
-        return dts.strftime('%Y-%m-%d')
-    elif hasattr(dts, 'date'):
-        return dts.date().isoformat()
-    elif hasattr(dts, 'strftime'):
-        return dts.strftime('%Y-%m-%d')
-    else:
-        return str(dts)[:10]
-
-
-def _parse_datetime_safe(valor):
-    if isinstance(valor, str):
-        try:
-            return datetime.strptime(valor[:19], '%Y-%m-%d %H:%M:%S')
-        except (ValueError, TypeError, IndexError):
-            return None
-    elif isinstance(valor, datetime):
-        return valor
-    elif hasattr(valor, 'to_pydatetime'):
-        return valor.to_pydatetime()
-    return None
-
 
 def _parse_dt(valor):
     if valor is None:
@@ -2368,123 +2351,213 @@ def _get_nomes_colaboradores(nums_list):
     return nomes
 
 
+#region FUNÇÕES PARA AJUSTE DE TURNO NOTURNO
+
+#region FUNÇÕES PARA AJUSTE DE TURNO NOTURNO
+
+def _extract_date_str(dts):
+    if isinstance(dts, str):
+        return dts.split(' ')[0] if ' ' in dts else dts[:10]
+    elif isinstance(dts, datetime):
+        return dts.strftime('%Y-%m-%d')
+    elif hasattr(dts, 'date'):
+        return dts.date().isoformat()
+    elif hasattr(dts, 'strftime'):
+        return dts.strftime('%Y-%m-%d')
+    else:
+        return str(dts)[:10]
+
+
+def _parse_datetime_safe(valor):
+    """Converte vários formatos de data/hora para datetime ou None."""
+    if isinstance(valor, str):
+        try:
+            return datetime.strptime(valor[:19], '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError, IndexError):
+            return None
+    elif isinstance(valor, datetime):
+        return valor
+    elif hasattr(valor, 'to_pydatetime'):
+        return valor.to_pydatetime()
+    return None
+
+
+def _is_midnight(dt_obj):
+    """Verifica se o datetime é exactamente meia-noite (00:00:00)."""
+    if not dt_obj:
+        return False
+    return dt_obj.hour == 0 and dt_obj.minute == 0 and dt_obj.second == 0
+
+
 def ajustar_picagens_turno_noturno(registos_db):
+    """
+    Reagrupa picagens de turnos que cruzam a meia-noite.
+    
+    Só move picagens em dois casos específicos:
+    
+    1) ENTRADA NOCTURNA (picagem >= 20:00, última do dia):
+       → Mover para dia SEGUINTE (D+1).
+       → Turno noite fica agrupado no dia da saída.
+    
+    2) SAÍDA DE TURNO TARDE (picagem hora == 0, ou seja 00:00-00:59):
+       → Mover para dia ANTERIOR (D-1), se D-1 tiver entrada tarde
+         isolada (última picagem 15-19h sem picagens de meio-dia).
+       → Turno tarde fica agrupado no dia da entrada.
+    
+    Tudo o resto fica INALTERADO.
+    """
     if not registos_db:
         return registos_db
     
     print("\n" + "="*70)
+    print(" AJUSTE DE TURNOS (noite e tarde apenas)")
     print("="*70)
     
-    # Converter para dicts
-    registos = []
+    # ─── PASSO 1: Converter, indexar, extrair picagens ───
+    registos = {}
+    picagens_por_reg = {}
+    
     for reg in registos_db:
-        if isinstance(reg, dict):
-            registos.append(reg.copy())
-        else:
-            registos.append(dict(reg))
-    
-    # reordenar picagens em cada registo 
-    print("reordenar picagens em cada registo")
-    
-    for registo in registos:
-        picagens = _extrair_picagens(registo)
-        
-        if picagens:
-            picagens_sorted = sorted(picagens, key=lambda x: x['datetime'])
-            
-            for i in range(1, 9):
-                registo[f'ss_{i:02d}'] = None
-            
-            for idx, pic in enumerate(picagens_sorted[:8]):
-                registo[f'ss_{(idx+1):02d}'] = pic['valor']
-    
-    # criar índice por (num, data) 
-    print("criar índice de registos")
-    
-    indice_registos = {}
-    for reg in registos:
-        num = str(reg.get('num', '')).strip()
-        data = _extract_date_str(reg.get('dts'))
-        chave = (num, data)
-        indice_registos[chave] = reg
-    
-    print(f"  Total de registos únicos: {len(indice_registos)}")
-    
-    #  combinar múltiplos registos do mesmo dia 
-    print(" Combinando múltiplos registos do mesmo dia...")
-    
-    for chave, registo in list(indice_registos.items()):
-        num, data = chave
-        picagens = _extrair_picagens(registo)
-        
-        if not picagens:
+        r = reg.copy() if isinstance(reg, dict) else dict(reg)
+        num = str(r.get('num', '')).strip()
+        dts = _extract_date_str(r.get('dts', ''))
+        if not num or not dts:
             continue
         
-        picagens_sorted = sorted(picagens, key=lambda x: x['datetime'])
+        registos[(num, dts)] = r
         
+        pics = []
         for i in range(1, 9):
-            registo[f'ss_{i:02d}'] = None
+            ss_val = r.get(f'ss_{i:02d}')
+            if ss_val:
+                dt = _parse_datetime_safe(ss_val)
+                if dt and not _is_midnight(dt):
+                    pics.append({
+                        'datetime': dt,
+                        'valor': ss_val if isinstance(ss_val, str) else dt.strftime('%Y-%m-%d %H:%M:%S'),
+                    })
+        pics.sort(key=lambda x: x['datetime'])
+        picagens_por_reg[(num, dts)] = pics
+    
+    # dts existentes por colaborador
+    dts_por_num = {}
+    for (num, dts) in registos.keys():
+        if num not in dts_por_num:
+            dts_por_num[num] = set()
+        dts_por_num[num].add(dts)
+    
+    # ─── Função auxiliar ───
+    def _is_entrada_tarde_isolada(num, dts):
+        """
+        Verifica se o registo tem uma entrada de turno tarde sem saída.
         
-        for idx, pic in enumerate(picagens_sorted[:8]):
-            registo[f'ss_{(idx+1):02d}'] = pic['valor']
-    
-    print("Reassigning punches based on time...")
-    
-    new_indice = {}
-    
-    for (num, data), registo in indice_registos.items():
-        picagens = _extrair_picagens(registo)
+        Verdadeiro se:
+          - Última picagem >= 15:00 e < 20:00
+          - Menos de 2 picagens no intervalo 09:00-14:59 (exclui turnos normais)
         
-        for pic in picagens:
-            punch_date = pic['datetime'].date()
-            
-            # Move 00:00-07:59 to previous day
-            if 0 <= pic['hora'] < 8:
-                adjusted_date = punch_date - timedelta(days=1)
-            # Move 23:00-23:59 to next day
-            elif 23 <= pic['hora'] <= 23:
-                adjusted_date = punch_date + timedelta(days=1)
-            # Keep 08:00-22:59 on original day
-            else:
-                adjusted_date = punch_date
-            
-            adjusted_date_str = adjusted_date.isoformat()
-            chave = (num, adjusted_date_str)
-            
-            # Create or get the adjusted day's record
-            if chave not in new_indice:
-                new_indice[chave] = {
-                    'num': num,
-                    'dts': adjusted_date_str,
-                    'dep': registo.get('dep', ''),
-                    'tp_hor': registo.get('tp_hor', ''),
-                    'ss_01': None, 'ss_02': None, 'ss_03': None, 'ss_04': None,
-                    'ss_05': None, 'ss_06': None, 'ss_07': None, 'ss_08': None
-                }
-            
-            # Add the punch to the adjusted day's record (next available slot)
-            for i in range(1, 9):
-                if new_indice[chave][f'ss_{i:02d}'] is None:
-                    new_indice[chave][f'ss_{i:02d}'] = pic['valor']
-                    break
+        Falso para turnos normais (ex: 08:37|13:03|13:59|17:56 → 2 picagens meio-dia).
+        """
+        pics = picagens_por_reg.get((num, dts), [])
+        if not pics:
+            return False
+        
+        ultima = pics[-1]['datetime']
+        if not (15 <= ultima.hour < 20):
+            return False
+        
+        # Turnos normais têm >= 2 picagens entre 09:00-14:59 (pausa almoço)
+        pics_meio_dia = sum(1 for p in pics if 9 <= p['datetime'].hour < 15)
+        if pics_meio_dia >= 2:
+            return False
+        
+        return True
     
-    # Sort punches in each new record
-    for registo in new_indice.values():
-        picagens = _extrair_picagens(registo)
-        if picagens:
-            picagens_sorted = sorted(picagens, key=lambda x: x['datetime'])
-            for i in range(1, 9):
-                registo[f'ss_{i:02d}'] = None
-            for idx, pic in enumerate(picagens_sorted[:8]):
-                registo[f'ss_{(idx+1):02d}'] = pic['valor']
-
-    registos_finais = list(new_indice.values())
+    # ─── PASSO 2: Classificar cada picagem ───
+    resultado = {}
+    movimentos = 0
     
-    print("\n" + "="*70)
-    print(f" CONCLUÍDO: {len(registos_finais)} registos finais")
+    for (num, dts), pics in picagens_por_reg.items():
+        dts_date = datetime.strptime(dts, '%Y-%m-%d').date()
+        dts_existentes = dts_por_num.get(num, set())
+        
+        for idx_p, p in enumerate(pics):
+            dt = p['datetime']
+            dts_destino = dts
+            
+            # ─── REGRA 1: Entrada nocturna >= 20:00 → dia seguinte ───
+            if dt.hour >= 20:
+                # Só move se é a última picagem do dia
+                is_ultima = (idx_p == len(pics) - 1)
+                if is_ultima:
+                    dia_seguinte_str = (dts_date + timedelta(days=1)).isoformat()
+                    if dia_seguinte_str in dts_existentes:
+                        dts_destino = dia_seguinte_str
+                        movimentos += 1
+                        print(f"  NOITE → {num} | {p['valor']} dts={dts} �� dts={dia_seguinte_str}")
+            
+            # ─── REGRA 2: Saída tarde hora == 0 → dia anterior ───
+            elif dt.hour == 0:
+                dia_anterior_str = (dts_date - timedelta(days=1)).isoformat()
+                if dia_anterior_str in dts_existentes:
+                    if _is_entrada_tarde_isolada(num, dia_anterior_str):
+                        dts_destino = dia_anterior_str
+                        movimentos += 1
+                        print(f"  TARDE ← {num} | {p['valor']} dts={dts} → dts={dia_anterior_str}")
+            
+            chave_dest = (num, dts_destino)
+            if chave_dest not in resultado:
+                resultado[chave_dest] = []
+            resultado[chave_dest].append(p)
+    
+    # ─── PASSO 3: Reconstruir registos ───
+    registos_finais = {}
+    
+    for (num, dts), pics in resultado.items():
+        seen = set()
+        pics_uniq = []
+        for p in pics:
+            if p['datetime'] not in seen:
+                pics_uniq.append(p)
+                seen.add(p['datetime'])
+        pics_uniq.sort(key=lambda x: x['datetime'])
+        
+        reg_original = registos.get((num, dts), {})
+        reg_final = {
+            'num': num, 'dts': dts,
+            'dep': reg_original.get('dep', ''),
+            'tp_hor': reg_original.get('tp_hor', ''),
+            'nt': min(len(pics_uniq), 8),
+            'ss_01': None, 'ss_02': None, 'ss_03': None, 'ss_04': None,
+            'ss_05': None, 'ss_06': None, 'ss_07': None, 'ss_08': None,
+        }
+        for idx, pic in enumerate(pics_uniq[:8]):
+            val = pic['valor']
+            if not isinstance(val, str):
+                val = pic['datetime'].strftime('%Y-%m-%d %H:%M:%S')
+            reg_final[f'ss_{(idx+1):02d}'] = val
+        
+        registos_finais[(num, dts)] = reg_final
+    
+    for (num, dts), r in registos.items():
+        if (num, dts) not in registos_finais:
+            registos_finais[(num, dts)] = {
+                'num': num, 'dts': dts,
+                'dep': r.get('dep', ''), 'tp_hor': r.get('tp_hor', ''),
+                'nt': 0,
+                'ss_01': None, 'ss_02': None, 'ss_03': None, 'ss_04': None,
+                'ss_05': None, 'ss_06': None, 'ss_07': None, 'ss_08': None,
+            }
+    
+    result = list(registos_finais.values())
+    result.sort(key=lambda r: (r.get('num', ''), r.get('dts', '')))
+    
+    print(f"\n CONCLUÍDO: {len(result)} registos | {movimentos} picagens movidas")
     print("="*70 + "\n")
     
-    return registos_finais
+    return result
+
+#endregion
+
 
 
 def load_template_workbook(dept_code):
@@ -2665,17 +2738,132 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
     base_path = '/mnt/Picagem/Picagem 2026_2'
     temp_dir = '/tmp/excel_sync'
     os.makedirs(temp_dir, exist_ok=True)
-    
+
+    KEY_COLS = ['num', 'dts']
+    SS_COLS = [f'ss_{i:02d}' for i in range(1, 9)]
+
+    # ===== ESTILOS (mesmo do _export_clean) =====
+    cor_header = "4472C4"
+    cor_clara = "FFFFFF"
+    cor_escura = "D9E8F5"
+
+    font_header = Font(bold=True, size=11, color="FFFFFF")
+    font_normal = Font(size=10)
+
+    alignment_center = Alignment(horizontal='center', vertical='center')
+    alignment_left = Alignment(horizontal='left', vertical='center')
+
+    thin_border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+
+    fill_header = PatternFill(start_color=cor_header, end_color=cor_header, fill_type="solid")
+
+    # ===== COLUNAS E RENOMEAÇÃO (mesmo do _export_clean) =====
+    colunas_ordem = [
+        'num', 'tp_hor', 'dep', 'dts', 'NOME', 'nt',
+        'ss_01', 'ss_02', 'ss_03', 'ss_04',
+        'ss_05', 'ss_06', 'ss_07', 'ss_08'
+    ]
+    colunas_display = {
+        'num': 'Número', 'tp_hor': 'Equipa', 'dep': 'Departamento',
+        'dts': 'Data', 'NOME': 'Nome', 'nt': 'Picagens',
+        'ss_01': 'P01', 'ss_02': 'P02', 'ss_03': 'P03', 'ss_04': 'P04',
+        'ss_05': 'P05', 'ss_06': 'P06', 'ss_07': 'P07', 'ss_08': 'P08'
+    }
+    headers_display = [colunas_display.get(c, c) for c in colunas_ordem]
+    picagens_cols = ['P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08']
+
+    def _normalize_df(df):
+        """Normaliza tipos de dados para garantir comparação correcta."""
+        df = df.copy()
+        if 'num' in df.columns:
+            df['num'] = df['num'].astype(str).str.strip()
+        if 'dts' in df.columns:
+            df['dts'] = df['dts'].apply(lambda x: str(x)[:10] if pd.notna(x) else '')
+        for col in ['dep', 'tp_hor']:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip().replace('None', '').replace('nan', '')
+        if 'nt' in df.columns:
+            df['nt'] = pd.to_numeric(df['nt'], errors='coerce').fillna(0).astype(int)
+        for col in SS_COLS:
+            if col in df.columns:
+                clean_str = df[col].apply(
+                    lambda x: str(x)[:19] if pd.notna(x) and str(x).strip() not in ('', 'None', 'nan', 'NaT') else None
+                )
+                df[col] = pd.to_datetime(clean_str, errors='coerce')
+            
+        return df
+
+    def _format_clean_sheet(ws, df_display, headers):
+        """Aplica a formatação do _export_clean a uma worksheet."""
+        # Header
+        for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = font_header
+            cell.fill = fill_header
+            cell.alignment = alignment_center
+            cell.border = thin_border
+
+        # Dados
+        for row_idx, (_, row) in enumerate(df_display.iterrows(), 2):
+            row_color = cor_clara if (row_idx - 2) % 2 == 0 else cor_escura
+            fill_row = PatternFill(start_color=row_color, end_color=row_color, fill_type="solid")
+
+            for col_idx, col_name in enumerate(headers, 1):
+                value = row[col_name]
+
+                # Tratar data para remover a parte da hora
+                if col_name == 'Data' and value:
+                    value = str(value).split(' ')[0] if ' ' in str(value) else value
+
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.font = font_normal
+                cell.fill = fill_row
+                cell.border = thin_border
+
+                if col_name in ['Número', 'Nome', 'Departamento', 'Equipa']:
+                    cell.alignment = alignment_left
+                else:
+                    cell.alignment = alignment_center
+
+        # Auto-ajuste de colunas
+        for column_cells in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(column_cells[0].column)
+            for cell in column_cells:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except:
+                    pass
+            adjusted_width = max_length + 2
+            if column_letter == 'E':
+                adjusted_width = max(adjusted_width, 30)
+            elif column_letter in ['F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
+                adjusted_width = max(adjusted_width, 15)
+            else:
+                adjusted_width = max(adjusted_width, 12)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+        ws.freeze_panes = "A2"
+
     try:
         df_novo = pd.DataFrame(registos_db)
-        df_novo['nome_funcionario'] = df_novo['num'].map(funcionarios_dict)
+        df_novo['NOME'] = df_novo['num'].map(funcionarios_dict)
+        df_novo = _normalize_df(df_novo)
+
         pastas_reais = {d.name.lower().strip(): d.path for d in os.scandir(base_path) if d.is_dir()}
 
         for dept_code, group_df in df_novo.groupby('dep'):
             dept_code = str(dept_code).strip()
             folder_name = DEPT_FOLDERS.get(dept_code)
             dept_path = pastas_reais.get(folder_name.lower().strip()) if folder_name else None
-            if not dept_path: 
+            if not dept_path:
                 print(f"Pasta não encontrada para {dept_code}")
                 continue
 
@@ -2688,40 +2876,82 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                 with open(remote_path, 'rb') as f_in, open(local_path, 'wb') as f_out:
                     f_out.write(f_in.read())
 
-                # 2. Carregar e Fazer APPEND
+                # 2. Carregar e Fazer MERGE
                 book = openpyxl.load_workbook(local_path, keep_vba=True)
+
                 if 'Raw Data' in book.sheetnames:
                     sheet = book['Raw Data']
                     data = list(sheet.values)
                     if len(data) > 0:
                         df_old = pd.DataFrame(data[1:], columns=data[0])
-                        df_final = pd.concat([df_old, group_df]).drop_duplicates()
+
+                        # Detectar se o ficheiro antigo tem colunas raw ou display
+                        if 'Número' in df_old.columns:
+                            # Ficheiro já está no formato display — reverter para raw para merge
+                            reverse_map = {v: k for k, v in colunas_display.items()}
+                            df_old.columns = [reverse_map.get(c, c) for c in df_old.columns]
+
+                        df_old = _normalize_df(df_old)
+
+                        # Garantir colunas iguais
+                        all_cols = list(dict.fromkeys(list(df_old.columns) + list(group_df.columns)))
+                        for col in all_cols:
+                            if col not in df_old.columns:
+                                df_old[col] = None
+                            if col not in group_df.columns:
+                                group_df[col] = None
+
+                        df_final = pd.concat([df_old, group_df], ignore_index=True)
+                        existing_keys = [k for k in KEY_COLS if k in df_final.columns]
+                        if existing_keys:
+                            df_final = df_final.drop_duplicates(subset=existing_keys, keep='last')
+                        else:
+                            df_final = df_final.drop_duplicates(keep='last')
+
+                        if 'dts' in df_final.columns and 'num' in df_final.columns:
+                            df_final = df_final.sort_values(['dts', 'num']).reset_index(drop=True)
                     else:
-                        df_final = group_df
+                        df_final = group_df.copy()
                     book.remove(sheet)
                 else:
-                    df_final = group_df
+                    df_final = group_df.copy()
 
-                # 3. Guardar com Auto-Ajuste
-                with pd.ExcelWriter(local_path, engine='openpyxl') as writer:
-                    writer.book = book
-                    df_final.to_excel(writer, sheet_name='Raw Data', index=False)
-                    ws = writer.sheets['Raw Data']
-                    for i, col in enumerate(df_final.columns):
-                        width = max(df_final[col].astype(str).map(len).max(), len(col)) + 2
-                        ws.column_dimensions[get_column_letter(i + 1)].width = width
+                # 3. Preparar o DataFrame no formato clean (display)
+                # Garantir coluna NOME
+                if 'NOME' not in df_final.columns:
+                    df_final['NOME'] = df_final['num'].map(funcionarios_dict)
 
-                # 4. Devolver à rede (Binário)
+                colunas_existentes = [c for c in colunas_ordem if c in df_final.columns]
+                df_display = df_final[colunas_existentes].copy()
+                df_display.columns = [colunas_display.get(c, c) for c in df_display.columns]
+
+                # Limpeza de picagens 00:00:00
+                for col in picagens_cols:
+                    if col in df_display.columns:
+                        df_display[col] = df_display[col].apply(
+                            lambda x: None if (x and isinstance(x, str) and '00:00:00' in x) else x
+                        )
+
+                # 4. Criar a sheet "Raw Data" com formatação clean
+                ws = book.create_sheet(title='Raw Data')
+                _format_clean_sheet(ws, df_display, list(df_display.columns))
+
+                # 5. Guardar
+                book.save(local_path)
+
+                # 6. Devolver à rede
                 with open(local_path, 'rb') as f_src, open(remote_path, 'wb') as f_dst:
                     f_dst.write(f_src.read())
-                
+
                 os.remove(local_path)
-                print(f" {dept_code} atualizado.")
+                print(f" {dept_code} atualizado ({len(df_final)} registos) — formato clean.")
 
             except Exception as e:
                 print(f" Erro em {dept_code}: {e}")
+                traceback.print_exc()
     except Exception as e:
         print(f" Erro Crítico: {e}")
+        traceback.print_exc()
 
 
 
@@ -3296,45 +3526,15 @@ def JustificacaoAprovar(request, format=None):
         parameters_data = request.data.get('parameters', {})
 
         justificacao_id = filter_data.get('id')
-        acao            = filter_data.get('acao', '').strip()
-        obs             = filter_data.get('obs', '') or ''
-        tipo_aprovador  = (filter_data.get('tipo') or '').strip()
+        acao            = filter_data.get('acao')          # 'aprovar' ou 'rejeitar'
+        obs             = filter_data.get('obs', '')
+        num_aprovador   = filter_data.get('num_aprovador')
+        tipo_aprovador  = filter_data.get('tipo')          # 'chefe' ou 'rh'
 
-        # ── num_aprovador: aceitar vários campos e fallback para o utilizador autenticado ──
-        num_aprovador = (
-            filter_data.get('num_aprovador')
-            or filter_data.get('num')
-            or filter_data.get('_num')
-            or ''
-        )
-        num_aprovador = str(num_aprovador).strip()
-
-        # Se ainda estiver vazio, tenta extrair do utilizador autenticado (sessão Django)
-        if not num_aprovador and hasattr(request, 'user') and request.user.is_authenticated:
-            num_aprovador = getattr(request.user, 'username', '') or ''
-
-        # ── Validar campos obrigatórios com mensagens específicas ──
-        erros = []
-        if not justificacao_id:
-            erros.append('id')
-        if not acao:
-            erros.append('acao')
-        if not num_aprovador:
-            erros.append('num_aprovador')
-        if not tipo_aprovador:
-            erros.append('tipo')
-
-        if erros:
+        if not all([justificacao_id, acao, num_aprovador, tipo_aprovador]):
             return Response({
                 "status": "error",
-                "title":  f"Campos obrigatórios em falta: {', '.join(erros)}",
-                "debug":  {
-                    "id":            justificacao_id,
-                    "acao":          acao,
-                    "num_aprovador": num_aprovador,
-                    "tipo":          tipo_aprovador,
-                    "filter_keys":   list(filter_data.keys()),
-                }
+                "title": "Campos obrigatórios em falta: id, acao, num_aprovador, tipo"
             })
 
         if acao not in ['aprovar', 'rejeitar']:
@@ -3344,7 +3544,7 @@ def JustificacaoAprovar(request, format=None):
             return Response({"status": "error", "title": "Tipo inválido. Use 'chefe' ou 'rh'."})
 
         with connections[connMssqlName].cursor() as cursor:
-            # Verificar estado actual
+            # Verificar estado atual
             cursor.execute("""
                 SELECT id, status, status_chefe, dep_codigo
                 FROM rponto.dbo.justificacoes
@@ -3357,19 +3557,20 @@ def JustificacaoAprovar(request, format=None):
 
             jid, status_atual, status_chefe_atual, dep_codigo = row
 
-            # ── Chefe a aprovar/rejeitar ──────────────────────────────
+            # ── Chefe a aprovar/rejeitar ──
             if tipo_aprovador == 'chefe':
                 if status_atual != 0:
                     return Response({
                         "status": "error",
-                        "title":  "Esta justificação já foi processada pelo chefe."
+                        "title": "Esta justificação já foi processada pelo chefe."
                     })
 
+                # Verificar se o aprovador é realmente chefe deste dep
                 deps_do_chefe = _get_deps_do_chefe(num_aprovador)
                 if dep_codigo and dep_codigo not in deps_do_chefe:
                     return Response({
                         "status": "error",
-                        "title":  "Não tem permissão para aprovar justificações deste departamento."
+                        "title": "Não tem permissão para aprovar justificações deste departamento."
                     })
 
                 if acao == 'aprovar':
@@ -3392,15 +3593,12 @@ def JustificacaoAprovar(request, format=None):
                 """, [novo_status_chefe, num_aprovador, obs,
                       novo_status_global, justificacao_id])
 
-            # ── RH a aprovar/rejeitar ─────────────────────────────────
+            # ── RH a aprovar/rejeitar ──
             elif tipo_aprovador == 'rh':
-                # RH pode aprovar qualquer justificação que não tenha sido
-                # rejeitada ou já concluída (status 0=pendente, 1=aguarda RH)
-                if status_atual in (2, 3, 4):
-                    labels = {2: 'já aprovada', 3: 'rejeitada pelo chefe', 4: 'já rejeitada pelo RH'}
+                if status_atual != 1:
                     return Response({
                         "status": "error",
-                        "title":  f"Esta justificação está {labels.get(status_atual, 'já processada')}."
+                        "title": "Esta justificação ainda não foi aprovada pelo chefe ou já foi processada pelo RH."
                     })
 
                 if acao == 'aprovar':
@@ -3422,6 +3620,42 @@ def JustificacaoAprovar(request, format=None):
                     WHERE id = %s
                 """, [novo_status_rh, num_aprovador, obs,
                       novo_status_global, justificacao_id])
+
+            # ── Mover ficheiro para pasta organizada quando RH aprova ──
+            if tipo_aprovador == 'rh' and acao == 'aprovar':
+                try:
+                    with connections[connMssqlName].cursor() as cursor_f:
+                        cursor_f.execute("""
+                            SELECT pdf_path, pdf_filename, dep_codigo, num
+                            FROM rponto.dbo.justificacoes
+                            WHERE id = %s
+                        """, [justificacao_id])
+                        row_f = cursor_f.fetchone()
+
+                    if row_f and row_f[0] and row_f[1]:
+                        old_path     = row_f[0]
+                        pdf_fname    = row_f[1]
+                        dep_codigo_f = row_f[2]
+                        num_f        = row_f[3]
+
+                        # Só mover se o ficheiro existir e ainda estiver na raiz
+                        old_dir  = os.path.dirname(os.path.abspath(old_path))
+                        base_abs = os.path.abspath(JUSTIFICACOES_BASE_PATH)
+
+                        if os.path.exists(old_path) and old_dir == base_abs:
+                            new_path = _get_justificacao_path(dep_codigo_f, num_f, pdf_fname)
+                            if old_path != new_path:
+                                shutil.move(old_path, new_path)
+                                # Actualizar pdf_path na BD
+                                with connections[connMssqlName].cursor() as cursor_upd:
+                                    cursor_upd.execute("""
+                                        UPDATE rponto.dbo.justificacoes
+                                        SET pdf_path = %s
+                                        WHERE id = %s
+                                    """, [new_path, justificacao_id])
+                except Exception as e_move:
+                    # Não bloquear a aprovação por falha no move — apenas logar
+                    print(f"[JustificacaoAprovar] Aviso: não foi possível mover o ficheiro: {e_move}")
 
         return Response({"status": "success", "title": titulo})
 
@@ -3768,10 +4002,6 @@ def JustificacaoPendentesCount(request, format=None):
         return Response({"status": "error", "title": str(e)})
 
 
-# ================================================================
-# ENDPOINT DEDICADO: Upload de PDF
-# Chamado via POST multipart/form-data (separado do def Sql)
-# ================================================================
 @api_view(['POST'])
 @renderer_classes([JSONRenderer])
 @permission_classes([IsAuthenticated])
@@ -3802,16 +4032,25 @@ def UploadJustificacaoPDF(request):
                 "title": "Ficheiro demasiado grande. Máximo permitido: 10MB."
             })
 
-        # Criar pasta se não existir
-        try:
-            os.makedirs(JUSTIFICACOES_BASE_PATH, exist_ok=True)
-        except Exception:
-            pass
+        # Obter dep_codigo e num da justificação para organizar em pastas
+        dep_codigo_up = None
+        num_up        = None
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT dep_codigo, num
+                FROM rponto.dbo.justificacoes
+                WHERE id = %s
+            """, [justificacao_id])
+            row_dep = cursor.fetchone()
+            if row_dep:
+                dep_codigo_up, num_up = row_dep
 
         # Gerar nome único para o ficheiro
-        ext = os.path.splitext(pdf_file.name)[1].lower() or '.pdf'
+        ext      = os.path.splitext(pdf_file.name)[1].lower() or '.pdf'
         filename = f"just_{justificacao_id}_{uuid.uuid4().hex[:8]}{ext}"
-        filepath = os.path.join(JUSTIFICACOES_BASE_PATH, filename)
+
+        # Caminho organizado: justificacoes/<dep>/<num>/filename
+        filepath = _get_justificacao_path(dep_codigo_up, num_up, filename)
 
         # Guardar ficheiro
         with open(filepath, 'wb') as f:
@@ -6983,3 +7222,615 @@ def MarcarNotificacaoLida(request, format=None):
     após o utilizador abrir o dropdown.
     """
     return Response({"status": "success"})
+
+
+#endregion
+
+#region Teste de saldo e trocas de ferias
+
+def FeriasSaldo(request, format=None):
+    try:
+        f   = request.data.get('filter', {})
+        num = (f.get('num') or '').strip()
+        ano = f.get('ano', datetime.now().year)
+
+        if not num:
+            return Response({'status': 'error', 'title': 'Número do colaborador obrigatório'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    num, ano, dias_direito, dias_ano_anterior,
+                    total_direito, ferias_saldo,
+                    dias_aprovados, dias_cancelados,
+                    dias_pendentes, dias_gozados
+                FROM rponto.dbo.vw_ferias_controlo
+                WHERE num = %s AND ano = %s
+            """, [num, ano])
+            cols = [c[0] for c in cursor.description]
+            row = cursor.fetchone()
+
+        if not row:
+            return Response({
+                'status': 'success',
+                'saldo': {
+                    'num': num, 'ano': ano,
+                    'total_direito': 0, 'ferias_saldo': 0,
+                    'dias_aprovados': 0, 'dias_cancelados': 0,
+                    'dias_pendentes': 0, 'dias_gozados': 0,
+                    'sem_registo': True
+                }
+            })
+
+        return Response({
+            'status': 'success',
+            'saldo': dict(zip(cols, row))
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+# ── Submeter cancelamento ──────────────────────────────
+def FeriasCancelamentoSubmeter(request, format=None):
+    try:
+        f         = request.data.get('filter', {})
+        pedido_id = f.get('pedido_id')
+        num       = (f.get('num') or '').strip()
+        obs       = (f.get('obs') or '').strip()
+
+        if not pedido_id or not num:
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            # Verificar que o pedido original existe e está aprovado_rh
+            cursor.execute("""
+                SELECT id, num, dep, data_ini, data_fim, n_dias, estado, tipo
+                FROM rponto.dbo.ferias_pedidos
+                WHERE id = %s AND num = %s
+            """, [pedido_id, num])
+            cols = [c[0] for c in cursor.description]
+            row = cursor.fetchone()
+
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+
+            orig = dict(zip(cols, row))
+
+            if orig['estado'] != 'aprovado_rh':
+                return Response({'status': 'error',
+                    'title': f"Só é possível cancelar pedidos aprovados (estado actual: {orig['estado']})"})
+
+            if orig['tipo'] != 'ferias':
+                return Response({'status': 'error',
+                    'title': 'Só é possível cancelar pedidos de férias originais'})
+
+            # Criar pedido de cancelamento
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_pedidos
+                    (num, dep, data_ini, data_fim, n_dias, obs_colab, estado,
+                     tipo, pedido_ref_id, data_ini_orig, data_fim_orig, n_dias_orig)
+                VALUES
+                    (%s, %s, %s, %s, %s, %s, 'pendente',
+                     'cancelamento', %s, %s, %s, %s)
+            """, [
+                num, orig['dep'],
+                orig['data_ini'], orig['data_fim'], orig['n_dias'],
+                obs or f"Pedido de cancelamento das férias de {orig['data_ini']} a {orig['data_fim']}",
+                pedido_id,
+                orig['data_ini'], orig['data_fim'], orig['n_dias']
+            ])
+
+            # Obter o ID do novo pedido
+            cursor.execute("SELECT SCOPE_IDENTITY()")
+            novo_id = cursor.fetchone()[0]
+
+            # Registar na auditoria
+            cursor.execute("""
+                SELECT ferias_saldo FROM rponto.dbo.ferias_saldo
+                WHERE num = %s AND ano = YEAR(%s)
+            """, [num, orig['data_ini']])
+            saldo_row = cursor.fetchone()
+            saldo_antes = saldo_row[0] if saldo_row else None
+
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_auditoria
+                    (pedido_id, num, acao, estado_anterior, estado_novo,
+                     data_ini_ant, data_fim_ant, n_dias_ant,
+                     saldo_antes, executado_por, obs)
+                VALUES
+                    (%s, %s, 'cancelamento_submetido', 'aprovado_rh', 'pendente',
+                     %s, %s, %s,
+                     %s, %s, %s)
+            """, [
+                novo_id, num,
+                orig['data_ini'], orig['data_fim'], orig['n_dias'],
+                saldo_antes, num, obs
+            ])
+
+        return Response({
+            'status': 'success',
+            'title': 'Pedido de cancelamento submetido com sucesso'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+# ── Submeter troca de datas ────────────────────────────
+def FeriasTrocaSubmeter(request, format=None):
+    try:
+        f             = request.data.get('filter', {})
+        pedido_id     = f.get('pedido_id')
+        num           = (f.get('num') or '').strip()
+        nova_data_ini = (f.get('nova_data_ini') or '').strip()
+        nova_data_fim = (f.get('nova_data_fim') or '').strip()
+        n_dias_novo   = f.get('n_dias')
+        obs           = (f.get('obs') or '').strip()
+
+        if not all([pedido_id, num, nova_data_ini, nova_data_fim, n_dias_novo]):
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            # Verificar pedido original
+            cursor.execute("""
+                SELECT id, num, dep, data_ini, data_fim, n_dias, estado, tipo
+                FROM rponto.dbo.ferias_pedidos
+                WHERE id = %s AND num = %s
+            """, [pedido_id, num])
+            cols = [c[0] for c in cursor.description]
+            row = cursor.fetchone()
+
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+
+            orig = dict(zip(cols, row))
+
+            if orig['estado'] != 'aprovado_rh':
+                return Response({'status': 'error',
+                    'title': f"Só é possível trocar pedidos aprovados (estado actual: {orig['estado']})"})
+
+            # 1. Marcar o pedido original como 'trocado'
+            cursor.execute("""
+                UPDATE rponto.dbo.ferias_pedidos
+                SET estado = 'trocado', updated_at = GETDATE()
+                WHERE id = %s
+            """, [pedido_id])
+
+            # 2. Criar pedido de troca com novas datas
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_pedidos
+                    (num, dep, data_ini, data_fim, n_dias, obs_colab, estado,
+                     tipo, pedido_ref_id, data_ini_orig, data_fim_orig, n_dias_orig)
+                VALUES
+                    (%s, %s, %s, %s, %s, %s, 'pendente',
+                     'troca', %s, %s, %s, %s)
+            """, [
+                num, orig['dep'],
+                nova_data_ini, nova_data_fim, n_dias_novo,
+                obs or f"Troca de férias: {orig['data_ini']}→{orig['data_fim']} para {nova_data_ini}→{nova_data_fim}",
+                pedido_id,
+                orig['data_ini'], orig['data_fim'], orig['n_dias']
+            ])
+
+            cursor.execute("SELECT SCOPE_IDENTITY()")
+            novo_id = cursor.fetchone()[0]
+
+            # Auditoria
+            cursor.execute("""
+                SELECT ferias_saldo FROM rponto.dbo.ferias_saldo
+                WHERE num = %s AND ano = YEAR(%s)
+            """, [num, orig['data_ini']])
+            saldo_row = cursor.fetchone()
+            saldo_antes = saldo_row[0] if saldo_row else None
+
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_auditoria
+                    (pedido_id, num, acao, estado_anterior, estado_novo,
+                     data_ini_ant, data_fim_ant, n_dias_ant,
+                     data_ini_nova, data_fim_nova, n_dias_novo,
+                     saldo_antes, executado_por, obs)
+                VALUES
+                    (%s, %s, 'troca_submetida', 'aprovado_rh', 'pendente',
+                     %s, %s, %s,
+                     %s, %s, %s,
+                     %s, %s, %s)
+            """, [
+                novo_id, num,
+                orig['data_ini'], orig['data_fim'], orig['n_dias'],
+                nova_data_ini, nova_data_fim, n_dias_novo,
+                saldo_antes, num, obs
+            ])
+
+        return Response({
+            'status': 'success',
+            'title': 'Pedido de troca submetido com sucesso'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+# ── Aprovar cancelamento/troca pelo chefe ──────────────
+def FeriasCancelTrocaAprovarChefe(request, format=None):
+    try:
+        f         = request.data.get('filter', {})
+        pedido_id = f.get('id')
+        acao      = f.get('acao', '').strip()
+        chefe_num = f.get('chefe_num', '').strip()
+        obs       = f.get('obs', '').strip()
+
+        if not pedido_id or acao not in ('aprovar', 'rejeitar'):
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT estado, tipo, num, data_ini, n_dias
+                FROM rponto.dbo.ferias_pedidos WHERE id = %s
+            """, [pedido_id])
+            row = cursor.fetchone()
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+
+            estado_actual, tipo, num, data_ini, n_dias = row
+
+            if estado_actual != 'pendente':
+                return Response({'status': 'error',
+                    'title': f'Pedido já foi processado (estado: {estado_actual})'})
+
+            if tipo not in ('cancelamento', 'troca'):
+                return Response({'status': 'error',
+                    'title': 'Este método é só para cancelamentos e trocas'})
+
+            novo_estado = 'aprovado_chefe' if acao == 'aprovar' else 'rejeitado_chefe'
+
+            cursor.execute("""
+                UPDATE rponto.dbo.ferias_pedidos
+                SET estado = %s, chefe_num = %s, chefe_data = GETDATE(),
+                    chefe_obs = %s, updated_at = GETDATE()
+                WHERE id = %s
+            """, [novo_estado, chefe_num, obs or None, pedido_id])
+
+            # Se troca rejeitada, restaurar o pedido original
+            if tipo == 'troca' and acao == 'rejeitar':
+                cursor.execute("""
+                    UPDATE rponto.dbo.ferias_pedidos
+                    SET estado = 'aprovado_rh', updated_at = GETDATE()
+                    WHERE id = (SELECT pedido_ref_id FROM rponto.dbo.ferias_pedidos WHERE id = %s)
+                """, [pedido_id])
+
+            # Auditoria
+            acao_audit = f"{tipo}_{'aprovada' if acao == 'aprovar' else 'rejeitada'}_chefe"
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_auditoria
+                    (pedido_id, num, acao, estado_anterior, estado_novo,
+                     executado_por, obs)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, [pedido_id, num, acao_audit, estado_actual, novo_estado,
+                  chefe_num, obs])
+
+        return Response({
+            'status': 'success',
+            'title': f'{"Cancelamento" if tipo == "cancelamento" else "Troca"} '
+                     f'{"aprovado" if acao == "aprovar" else "rejeitado"} pelo chefe'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+# ── Aprovar cancelamento/troca pelo RH ─────────────────
+def FeriasCancelTrocaAprovarRH(request, format=None):
+    try:
+        f         = request.data.get('filter', {})
+        pedido_id = f.get('id')
+        acao      = f.get('acao', '').strip()
+        rh_num    = f.get('rh_num', '').strip()
+        obs       = f.get('obs', '').strip()
+
+        if not pedido_id or acao not in ('aprovar', 'rejeitar'):
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT estado, tipo, num, data_ini, data_fim, n_dias, pedido_ref_id
+                FROM rponto.dbo.ferias_pedidos WHERE id = %s
+            """, [pedido_id])
+            row = cursor.fetchone()
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+
+            estado_actual, tipo, num, data_ini, data_fim, n_dias, ref_id = row
+
+            if estado_actual != 'aprovado_chefe':
+                return Response({'status': 'error',
+                    'title': f'Pedido precisa de aprovação do chefe primeiro (estado: {estado_actual})'})
+
+            # Saldo antes
+            cursor.execute("""
+                SELECT ferias_saldo FROM rponto.dbo.ferias_saldo
+                WHERE num = %s AND ano = YEAR(%s)
+            """, [num, data_ini])
+            saldo_row = cursor.fetchone()
+            saldo_antes = saldo_row[0] if saldo_row else None
+
+            novo_estado = 'aprovado_rh' if acao == 'aprovar' else 'rejeitado_rh'
+
+            cursor.execute("""
+                UPDATE rponto.dbo.ferias_pedidos
+                SET estado = %s, rh_num = %s, rh_data = GETDATE(),
+                    rh_obs = %s, updated_at = GETDATE()
+                WHERE id = %s
+            """, [novo_estado, rh_num, obs or None, pedido_id])
+
+            # Se cancelamento aprovado → marcar original como 'cancelado'
+            if tipo == 'cancelamento' and acao == 'aprovar' and ref_id:
+                cursor.execute("""
+                    UPDATE rponto.dbo.ferias_pedidos
+                    SET estado = 'cancelado', updated_at = GETDATE()
+                    WHERE id = %s
+                """, [ref_id])
+
+            # Se troca rejeitada → restaurar original
+            if tipo == 'troca' and acao == 'rejeitar' and ref_id:
+                cursor.execute("""
+                    UPDATE rponto.dbo.ferias_pedidos
+                    SET estado = 'aprovado_rh', updated_at = GETDATE()
+                    WHERE id = %s
+                """, [ref_id])
+
+            # Saldo depois (o trigger já actualizou)
+            cursor.execute("""
+                SELECT ferias_saldo FROM rponto.dbo.ferias_saldo
+                WHERE num = %s AND ano = YEAR(%s)
+            """, [num, data_ini])
+            saldo_row2 = cursor.fetchone()
+            saldo_depois = saldo_row2[0] if saldo_row2 else None
+
+            # Auditoria
+            acao_audit = f"{tipo}_{'aprovada' if acao == 'aprovar' else 'rejeitada'}_rh"
+            cursor.execute("""
+                INSERT INTO rponto.dbo.ferias_auditoria
+                    (pedido_id, num, acao, estado_anterior, estado_novo,
+                     saldo_antes, saldo_depois, executado_por, obs)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, [pedido_id, num, acao_audit, estado_actual, novo_estado,
+                  saldo_antes, saldo_depois, rh_num, obs])
+
+        return Response({
+            'status': 'success',
+            'title': f'{"Cancelamento" if tipo == "cancelamento" else "Troca"} '
+                     f'{"aprovado" if acao == "aprovar" else "rejeitado"} pelos RH'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+
+def FeriasPedirTroca(request, format=None):
+    """Colaborador pede troca de datas de férias aprovadas — RH decide"""
+    try:
+        f             = request.data.get('filter', {})
+        pedido_id     = f.get('id')
+        num           = f.get('num', '').strip()
+        obs           = f.get('obs', '').strip()
+        nova_data_ini = f.get('nova_data_ini', '').strip()
+        nova_data_fim = f.get('nova_data_fim', '').strip()
+
+        if not pedido_id or not obs or not nova_data_ini or not nova_data_fim:
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(
+                "SELECT estado, num FROM rponto.dbo.ferias_pedidos WHERE id = %s",
+                [pedido_id]
+            )
+            row = cursor.fetchone()
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+            if row[1] != num:
+                return Response({'status': 'error', 'title': 'Sem permissão'})
+            if row[0] != 'aprovado_rh':
+                return Response({'status': 'error', 'title': 'Só pode pedir troca de férias aprovadas'})
+
+            cursor.execute("""
+                UPDATE rponto.dbo.ferias_pedidos
+                SET estado                = 'pedido_troca',
+                    nova_data_ini         = %s,
+                    nova_data_fim         = %s,
+                    obs_pedido_alteracao   = %s,
+                    updated_at            = GETDATE()
+                WHERE id = %s
+            """, [nova_data_ini, nova_data_fim, obs, pedido_id])
+
+        return Response({
+            'status': 'success',
+            'title':  'Pedido de troca enviado aos RH'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+def FeriasPedirCancelamento(request, format=None):
+    """Colaborador pede cancelamento de férias aprovadas — RH decide"""
+    try:
+        f         = request.data.get('filter', {})
+        pedido_id = f.get('id')
+        num       = f.get('num', '').strip()
+        obs       = f.get('obs', '').strip()
+
+        if not pedido_id or not obs:
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(
+                "SELECT estado, num FROM rponto.dbo.ferias_pedidos WHERE id = %s",
+                [pedido_id]
+            )
+            row = cursor.fetchone()
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+            if row[1] != num:
+                return Response({'status': 'error', 'title': 'Sem permissão'})
+            if row[0] != 'aprovado_rh':
+                return Response({'status': 'error', 'title': 'Só pode pedir cancelamento de férias aprovadas'})
+
+            cursor.execute("""
+                UPDATE rponto.dbo.ferias_pedidos
+                SET estado                = 'pedido_cancelamento',
+                    obs_pedido_alteracao   = %s,
+                    updated_at            = GETDATE()
+                WHERE id = %s
+            """, [obs, pedido_id])
+
+        return Response({
+            'status': 'success',
+            'title':  'Pedido de cancelamento enviado aos RH'
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+
+
+def FeriasDecidirAlteracao(request, format=None):
+    """RH decide sobre pedido de cancelamento ou troca de datas"""
+    try:
+        f         = request.data.get('filter', {})
+        pedido_id = f.get('id')
+        acao      = f.get('acao', '').strip()       # 'aprovar' ou 'rejeitar'
+        rh_num    = f.get('rh_num', '').strip()
+        obs       = f.get('obs', '').strip()
+
+        if not pedido_id or acao not in ('aprovar', 'rejeitar'):
+            return Response({'status': 'error', 'title': 'Parâmetros inválidos'})
+
+        if acao == 'rejeitar' and not obs:
+            return Response({'status': 'error', 'title': 'Deve indicar o motivo da rejeição'})
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT estado, nova_data_ini, nova_data_fim, n_dias
+                FROM rponto.dbo.ferias_pedidos WHERE id = %s
+            """, [pedido_id])
+            row = cursor.fetchone()
+            if not row:
+                return Response({'status': 'error', 'title': 'Pedido não encontrado'})
+
+            estado_atual  = row[0]
+            nova_data_ini = row[1]
+            nova_data_fim = row[2]
+
+            if estado_atual not in ('pedido_cancelamento', 'pedido_troca'):
+                return Response({'status': 'error',
+                    'title': f'Pedido não está pendente de decisão (estado: {estado_atual})'})
+
+            # ── PEDIDO DE CANCELAMENTO ──
+            if estado_atual == 'pedido_cancelamento':
+                if acao == 'aprovar':
+                    # Cancelar → trigger devolve saldo
+                    cursor.execute("""
+                        UPDATE rponto.dbo.ferias_pedidos
+                        SET estado     = 'cancelado',
+                            rh_num     = %s,
+                            rh_data    = GETDATE(),
+                            rh_obs     = %s,
+                            updated_at = GETDATE()
+                        WHERE id = %s
+                    """, [rh_num or None, obs or 'Cancelamento aprovado', pedido_id])
+                    msg = 'Cancelamento aprovado. Saldo reposto automaticamente.'
+                else:
+                    # Rejeitar → volta a aprovado_rh
+                    cursor.execute("""
+                        UPDATE rponto.dbo.ferias_pedidos
+                        SET estado                = 'aprovado_rh',
+                            obs_pedido_alteracao   = NULL,
+                            rh_obs     = %s,
+                            updated_at = GETDATE()
+                        WHERE id = %s
+                    """, [obs, pedido_id])
+                    msg = 'Cancelamento rejeitado. Férias mantêm-se.'
+
+            # ── PEDIDO DE TROCA ──
+            elif estado_atual == 'pedido_troca':
+                if acao == 'aprovar':
+                    if not nova_data_ini or not nova_data_fim:
+                        return Response({'status': 'error',
+                            'title': 'Novas datas não encontradas no pedido'})
+
+                    # Calcular novos dias úteis
+                    from datetime import datetime, timedelta
+                    d_ini = nova_data_ini if isinstance(nova_data_ini, datetime) else datetime.strptime(str(nova_data_ini)[:10], '%Y-%m-%d')
+                    d_fim = nova_data_fim if isinstance(nova_data_fim, datetime) else datetime.strptime(str(nova_data_fim)[:10], '%Y-%m-%d')
+                    n_dias_novos = 0
+                    curr = d_ini
+                    while curr <= d_fim:
+                        if curr.weekday() < 5:  # seg-sex
+                            n_dias_novos += 1
+                        curr += timedelta(days=1)
+
+                    # 1) Primeiro voltar a aprovado_rh para o trigger devolver o saldo antigo
+                    # 2) Depois actualizar datas e n_dias
+                    # 3) O trigger vai descontar os novos dias
+
+                    # Passo 1: estado temporário para trigger repor saldo antigo
+                    # (o trigger dispara ao sair de aprovado_rh)
+                    cursor.execute("""
+                        UPDATE rponto.dbo.ferias_pedidos
+                        SET estado = 'cancelado',
+                            updated_at = GETDATE()
+                        WHERE id = %s
+                    """, [pedido_id])
+
+                    # Passo 2: actualizar datas e reactivar como aprovado_rh
+                    cursor.execute("""
+                        UPDATE rponto.dbo.ferias_pedidos
+                        SET estado                = 'aprovado_rh',
+                            data_ini              = %s,
+                            data_fim              = %s,
+                            n_dias                = %s,
+                            nova_data_ini         = NULL,
+                            nova_data_fim         = NULL,
+                            obs_pedido_alteracao   = NULL,
+                            rh_num                = %s,
+                            rh_data               = GETDATE(),
+                            rh_obs                = %s,
+                            updated_at            = GETDATE()
+                        WHERE id = %s
+                    """, [
+                        str(nova_data_ini)[:10],
+                        str(nova_data_fim)[:10],
+                        n_dias_novos,
+                        rh_num or None,
+                        obs or 'Troca de datas aprovada',
+                        pedido_id
+                    ])
+                    msg = f'Troca aprovada. Novas datas registadas ({n_dias_novos} dias úteis).'
+                else:
+                    # Rejeitar → volta a aprovado_rh, limpa campos
+                    cursor.execute("""
+                        UPDATE rponto.dbo.ferias_pedidos
+                        SET estado                = 'aprovado_rh',
+                            nova_data_ini         = NULL,
+                            nova_data_fim         = NULL,
+                            obs_pedido_alteracao   = NULL,
+                            rh_obs     = %s,
+                            updated_at = GETDATE()
+                        WHERE id = %s
+                    """, [obs, pedido_id])
+                    msg = 'Troca rejeitada. Datas originais mantêm-se.'
+
+        return Response({'status': 'success', 'title': msg})
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({'status': 'error', 'title': str(e)})
+

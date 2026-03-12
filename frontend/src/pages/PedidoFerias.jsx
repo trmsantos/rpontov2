@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import dayjs from 'dayjs';
 import {
     DatePicker, Input, Button, Tag, Modal,
@@ -6,7 +6,8 @@ import {
 } from 'antd';
 import {
     PlusOutlined, CalendarOutlined, ClockCircleOutlined,
-    CheckCircleOutlined, StopOutlined, SyncOutlined, SendOutlined
+    CheckCircleOutlined, StopOutlined, SyncOutlined, SendOutlined,
+    SwapOutlined
 } from '@ant-design/icons';
 import { fetchPost } from 'utils/fetch';
 import { API_URL } from 'config';
@@ -17,14 +18,15 @@ import YScroll from 'components/YScroll';
 const { RangePicker } = DatePicker;
 const { TextArea }    = Input;
 
-/* ── Helpers ─────────────────────────────────────────── */
 const ESTADOS = {
-    pendente:         { label: 'Pendente',              color: 'orange' },
-    aprovado_chefe:   { label: 'Aprovado pelo Chefe',   color: 'blue'   },
-    rejeitado_chefe:  { label: 'Rejeitado pelo Chefe',  color: 'red'    },
-    aprovado_rh:      { label: 'Aprovado por RH',       color: 'green'  },
-    rejeitado_rh:     { label: 'Rejeitado por RH',      color: 'red'    },
-    cancelado:        { label: 'Cancelado',             color: 'default'},
+    pendente:                { label: 'Pendente',              color: 'orange'  },
+    aprovado_chefe:          { label: 'Aprovado pelo Chefe',   color: 'blue'    },
+    rejeitado_chefe:         { label: 'Rejeitado pelo Chefe',  color: 'red'     },
+    aprovado_rh:             { label: 'Aprovado por RH',       color: 'green'   },
+    rejeitado_rh:            { label: 'Rejeitado por RH',      color: 'red'     },
+    cancelado:               { label: 'Cancelado',             color: 'default' },
+    pedido_cancelamento:     { label: 'Cancelamento pedido',   color: 'volcano' },
+    pedido_troca:            { label: 'Troca pedida',          color: 'purple'  },
 };
 
 const TagEstado = ({ estado }) => {
@@ -80,19 +82,189 @@ const FluxoPedido = ({ pedido }) => (
                 {pedido.rh_data && <p className="text-xs text-gray-400">{fmtDt(pedido.rh_data)}</p>}
                 {pedido.rh_obs  && <p className="text-xs text-gray-500 italic mt-0.5">"{pedido.rh_obs}"</p>}
             </Timeline.Item>
+            {/* Pedido de cancelamento ou troca */}
+            {pedido.estado === 'pedido_cancelamento' && (
+                <Timeline.Item color="volcano" dot={<StopOutlined />}>
+                    <p className="text-xs font-bold text-slate-700">Cancelamento pedido pelo colaborador</p>
+                    <p className="text-xs text-gray-400">Aguarda decisão dos RH</p>
+                    {pedido.obs_pedido_alteracao && (
+                        <p className="text-xs text-gray-500 italic mt-0.5">"{pedido.obs_pedido_alteracao}"</p>
+                    )}
+                </Timeline.Item>
+            )}
+            {pedido.estado === 'pedido_troca' && (
+                <Timeline.Item color="purple" dot={<SwapOutlined />}>
+                    <p className="text-xs font-bold text-slate-700">Troca de datas pedida pelo colaborador</p>
+                    <p className="text-xs text-gray-400">Aguarda decisão dos RH</p>
+                    {pedido.nova_data_ini && (
+                        <p className="text-xs text-indigo-600 font-semibold mt-0.5">
+                            Novas datas: {fmtData(pedido.nova_data_ini)} → {fmtData(pedido.nova_data_fim)}
+                        </p>
+                    )}
+                    {pedido.obs_pedido_alteracao && (
+                        <p className="text-xs text-gray-500 italic mt-0.5">"{pedido.obs_pedido_alteracao}"</p>
+                    )}
+                </Timeline.Item>
+            )}
         </Timeline>
     </div>
 );
 
+/* ── Modal pedir cancelamento ─────────────────────────── */
+const ModalPedirCancelamento = ({ visible, pedido, onConfirm, onCancel }) => {
+    const [obs,     setObs]     = useState('');
+    const [loading, setLoading] = useState(false);
+    useEffect(() => { if (visible) setObs(''); }, [visible]);
+
+    if (!pedido) return null;
+    return (
+        <Modal open={visible} onCancel={onCancel} footer={null}
+               title="🚫 Pedir cancelamento de férias" destroyOnClose centered>
+            <div className="space-y-4 py-2">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                    <p className="text-xs font-bold text-amber-700">⚠️ Férias já aprovadas</p>
+                    <p className="text-xs text-amber-600 mt-1">
+                        Como estas férias já foram aprovadas, o seu pedido de cancelamento será enviado aos RH para decisão.
+                    </p>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3 text-sm">
+                    <div className="flex items-center gap-2 text-slate-600">
+                        <CalendarOutlined className="text-indigo-400" />
+                        <span className="font-semibold">
+                            {fmtData(pedido.data_ini)} → {fmtData(pedido.data_fim)}
+                        </span>
+                        <span className="text-xs text-gray-400">({pedido.n_dias}d úteis)</span>
+                    </div>
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1.5">
+                        Motivo do cancelamento <span className="text-red-500">*</span>
+                    </label>
+                    <TextArea rows={3} value={obs} onChange={e => setObs(e.target.value)}
+                              placeholder="Indique o motivo do cancelamento..."
+                              maxLength={500} showCount className="rounded-lg" />
+                </div>
+                <div className="flex gap-2 justify-end pt-1">
+                    <Button onClick={onCancel} disabled={loading}>Voltar</Button>
+                    <button
+                        onClick={async () => { setLoading(true); await onConfirm(obs); setLoading(false); }}
+                        disabled={loading || !obs.trim()}
+                        className="px-5 py-2 text-white font-bold rounded-lg transition-colors
+                            flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed
+                            bg-red-500 hover:bg-red-600">
+                        {loading && <SyncOutlined spin />}
+                        Enviar pedido de cancelamento
+                    </button>
+                </div>
+            </div>
+        </Modal>
+    );
+};
+
+/* ── Modal pedir troca de datas ───────────────────────── */
+const ModalPedirTroca = ({ visible, pedido, onConfirm, onCancel }) => {
+    const [obs,       setObs]       = useState('');
+    const [novasDatas, setNovasDatas] = useState(null);
+    const [novosDias,  setNovosDias]  = useState(null);
+    const [loading,   setLoading]   = useState(false);
+    useEffect(() => {
+        if (visible) { setObs(''); setNovasDatas(null); setNovosDias(null); }
+    }, [visible]);
+
+    if (!pedido) return null;
+    return (
+        <Modal open={visible} onCancel={onCancel} footer={null}
+               title="🔄 Pedir troca de datas" destroyOnClose centered width={480}>
+            <div className="space-y-4 py-2">
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                    <p className="text-xs font-bold text-purple-700">Troca de férias aprovadas</p>
+                    <p className="text-xs text-purple-600 mt-1">
+                        O pedido de troca será enviado aos RH. As datas actuais mantêm-se até à aprovação.
+                    </p>
+                </div>
+
+                {/* Datas actuais */}
+                <div className="bg-slate-50 rounded-xl p-3">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Datas actuais</p>
+                    <div className="flex items-center gap-2 text-slate-600">
+                        <CalendarOutlined className="text-indigo-400" />
+                        <span className="font-semibold text-sm">
+                            {fmtData(pedido.data_ini)} → {fmtData(pedido.data_fim)}
+                        </span>
+                        <span className="text-xs text-gray-400">({pedido.n_dias}d)</span>
+                    </div>
+                </div>
+
+                {/* Novas datas */}
+                <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1.5">
+                        Novas datas pretendidas <span className="text-red-500">*</span>
+                    </label>
+                    <RangePicker
+                        format="DD/MM/YYYY"
+                        style={{ width: '100%' }}
+                        onChange={(v) => { setNovasDatas(v); setNovosDias(calcDiasUteis(v)); }}
+                        disabledDate={d => d && d.isBefore(dayjs(), 'day')}
+                        placeholder={['Nova data início', 'Nova data fim']}
+                    />
+                    {novosDias !== null && novosDias > 0 && (
+                        <p className="text-xs text-indigo-600 font-semibold mt-1.5">
+                            → {novosDias} dia{novosDias !== 1 ? 's' : ''} útil{novosDias !== 1 ? 'eis' : ''}
+                        </p>
+                    )}
+                </div>
+
+                {/* Motivo */}
+                <div>
+                    <label className="text-xs font-bold text-gray-500 uppercase block mb-1.5">
+                        Motivo da troca <span className="text-red-500">*</span>
+                    </label>
+                    <TextArea rows={3} value={obs} onChange={e => setObs(e.target.value)}
+                              placeholder="Indique o motivo da troca de datas..."
+                              maxLength={500} showCount className="rounded-lg" />
+                </div>
+
+                <div className="flex gap-2 justify-end pt-1">
+                    <Button onClick={onCancel} disabled={loading}>Voltar</Button>
+                    <button
+                        onClick={async () => {
+                            setLoading(true);
+                            await onConfirm(obs, novasDatas);
+                            setLoading(false);
+                        }}
+                        disabled={loading || !obs.trim() || !novasDatas?.[0] || !novasDatas?.[1] || novosDias === 0}
+                        className="px-5 py-2 text-white font-bold rounded-lg transition-colors
+                            flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed
+                            bg-purple-600 hover:bg-purple-700">
+                        {loading && <SyncOutlined spin />}
+                        Enviar pedido de troca
+                    </button>
+                </div>
+            </div>
+        </Modal>
+    );
+};
+
 /* ── Card de pedido ──────────────────────────────────── */
-const CardPedido = ({ pedido, authNum, onCancelar, onVerDetalhe }) => {
-    const podeCancelar = pedido.num === authNum && pedido.estado === 'pendente';
-    const borderClass  =
-        pedido.estado === 'aprovado_rh'       ? 'border-green-200  bg-green-50/30'  :
-        pedido.estado.startsWith('rejeitado') ? 'border-red-200    bg-red-50/30'    :
-        pedido.estado === 'aprovado_chefe'    ? 'border-blue-200   bg-blue-50/30'   :
-        pedido.estado === 'cancelado'         ? 'border-gray-200   bg-gray-50/30'   :
-                                                'border-orange-200 bg-orange-50/30' ;
+const CardPedido = ({ pedido, authNum, onCancelar, onPedirCancelamento, onPedirTroca, onVerDetalhe }) => {
+    // Cancelar directamente: só pendente ou aprovado_chefe
+    const podeCancelarDirecto = pedido.num === authNum &&
+        (pedido.estado === 'pendente' || pedido.estado === 'aprovado_chefe');
+
+    // Pedir cancelamento/troca ao RH: só aprovado_rh
+    const podePedirAlteracao = pedido.num === authNum && pedido.estado === 'aprovado_rh';
+
+    // Já tem pedido pendente de alteração
+    const temPedidoPendente = pedido.estado === 'pedido_cancelamento' || pedido.estado === 'pedido_troca';
+
+    const borderClass =
+        pedido.estado === 'aprovado_rh'           ? 'border-green-200  bg-green-50/30'   :
+        pedido.estado.startsWith('rejeitado')     ? 'border-red-200    bg-red-50/30'     :
+        pedido.estado === 'aprovado_chefe'        ? 'border-blue-200   bg-blue-50/30'    :
+        pedido.estado === 'cancelado'             ? 'border-gray-200   bg-gray-50/30'    :
+        pedido.estado === 'pedido_cancelamento'   ? 'border-orange-200 bg-orange-50/30'  :
+        pedido.estado === 'pedido_troca'          ? 'border-purple-200 bg-purple-50/30'  :
+                                                    'border-orange-200 bg-orange-50/30'  ;
     return (
         <div className={`rounded-xl border shadow-sm p-4 transition-all hover:shadow-md ${borderClass}`}>
             <div className="flex items-start justify-between gap-2 mb-3">
@@ -112,10 +284,27 @@ const CardPedido = ({ pedido, authNum, onCancelar, onVerDetalhe }) => {
                 </div>
                 <TagEstado estado={pedido.estado} />
             </div>
+
+            {/* Novas datas (se pedido_troca) */}
+            {pedido.estado === 'pedido_troca' && pedido.nova_data_ini && (
+                <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2 mb-3 border border-purple-100">
+                    <SwapOutlined className="text-purple-500 text-sm" />
+                    <span className="text-xs font-bold text-purple-700">
+                        Novas datas: {fmtData(pedido.nova_data_ini)} → {fmtData(pedido.nova_data_fim)}
+                    </span>
+                </div>
+            )}
+
             {pedido.obs_colab && (
                 <p className="text-xs text-gray-500 italic mb-3 border-l-2 border-gray-200 pl-2">
                     "{pedido.obs_colab}"
                 </p>
+            )}
+            {pedido.obs_pedido_alteracao && (
+                <div className="flex items-start gap-1.5 mb-3">
+                    <span className="text-[10px] font-bold text-purple-600 uppercase shrink-0 mt-0.5">Motivo:</span>
+                    <span className="text-xs text-gray-600 italic">"{pedido.obs_pedido_alteracao}"</span>
+                </div>
             )}
             {(pedido.chefe_obs || pedido.rh_obs) && (
                 <div className="mb-3 space-y-1.5">
@@ -134,14 +323,17 @@ const CardPedido = ({ pedido, authNum, onCancelar, onVerDetalhe }) => {
                 </div>
             )}
             <p className="text-[10px] text-gray-400 mb-3">Submetido em {fmtDt(pedido.created_at)}</p>
-            <div className="flex gap-2 pt-2 border-t border-gray-100/80">
+
+            <div className="flex gap-2 pt-2 border-t border-gray-100/80 flex-wrap">
                 <button
                     onClick={() => onVerDetalhe(pedido)}
                     className="text-xs text-indigo-600 hover:bg-indigo-50 px-2.5 py-1.5 rounded-lg font-semibold transition-colors"
                 >
                     Ver fluxo
                 </button>
-                {podeCancelar && (
+
+                {/* Cancelar directamente (pendente/aprovado_chefe) */}
+                {podeCancelarDirecto && (
                     <button
                         onClick={() => onCancelar(pedido)}
                         className="flex items-center gap-1 text-xs text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg font-semibold transition-colors ml-auto"
@@ -149,6 +341,76 @@ const CardPedido = ({ pedido, authNum, onCancelar, onVerDetalhe }) => {
                         <StopOutlined /> Cancelar
                     </button>
                 )}
+
+                {/* Pedir cancelamento ou troca ao RH (aprovado_rh) */}
+                {podePedirAlteracao && (
+                    <>
+                        <button
+                            onClick={() => onPedirTroca(pedido)}
+                            className="flex items-center gap-1 text-xs text-purple-600 hover:bg-purple-50 px-2.5 py-1.5 rounded-lg font-semibold transition-colors ml-auto"
+                        >
+                            <SwapOutlined /> Trocar datas
+                        </button>
+                        <button
+                            onClick={() => onPedirCancelamento(pedido)}
+                            className="flex items-center gap-1 text-xs text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg font-semibold transition-colors"
+                        >
+                            <StopOutlined /> Pedir cancelamento
+                        </button>
+                    </>
+                )}
+
+                {/* Indicação de pedido pendente */}
+                {temPedidoPendente && (
+                    <span className="text-[10px] text-gray-400 italic ml-auto self-center">
+                        Aguarda decisão dos RH...
+                    </span>
+                )}
+            </div>
+        </div>
+    );
+};
+
+/* ── Card de saldo ───────────────────────────────────── */
+const CardSaldo = ({ saldo }) => {
+    if (!saldo) return null;
+    const percentagem = saldo.total_direito > 0
+        ? Math.round((saldo.ferias_saldo / saldo.total_direito) * 100)
+        : 0;
+    const corBarra =
+        percentagem > 50 ? 'bg-green-500'  :
+        percentagem > 20 ? 'bg-amber-500'  :
+                           'bg-red-500';
+    return (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h2 className="text-xs font-black text-slate-600 uppercase mb-4 flex items-center gap-2">
+                <CalendarOutlined className="text-green-500" /> O meu saldo de férias ({saldo.ano})
+            </h2>
+            <div className="space-y-3">
+                <div className="flex items-end justify-between">
+                    <div>
+                        <p className="text-4xl font-black text-slate-800">{saldo.ferias_saldo}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">dias disponíveis</p>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-sm font-bold text-slate-500">{saldo.total_direito}</p>
+                        <p className="text-[10px] text-slate-400">dias totais</p>
+                    </div>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2.5">
+                    <div className={`${corBarra} h-2.5 rounded-full transition-all duration-500`}
+                         style={{ width: `${percentagem}%` }} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="bg-slate-50 rounded-lg p-2 text-center">
+                        <p className="text-sm font-black text-slate-700">{saldo.dias_direito}</p>
+                        <p className="text-[10px] text-slate-400">Dias base</p>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg p-2 text-center">
+                        <p className="text-sm font-black text-slate-700">{saldo.dias_ano_anterior}</p>
+                        <p className="text-[10px] text-slate-400">Ano anterior</p>
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -162,22 +424,22 @@ export default function PedidoFerias() {
     const { openNotification } = useContext(LayoutContext);
 
     const [rows,       setRows]       = useState([]);
+    const [saldo,      setSaldo]      = useState(null);
     const [loading,    setLoading]    = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [detalhe,    setDetalhe]    = useState(null);
+
+    // Modais de alteração
+    const [modalCancelamento, setModalCancelamento] = useState({ visible: false, pedido: null });
+    const [modalTroca,        setModalTroca]        = useState({ visible: false, pedido: null });
 
     const [form]      = Form.useForm();
     const [dateRange, setDateRange] = useState(null);
     const [nDias,     setNDias]     = useState(null);
 
-    // ── Debug ──
-    console.log('[PedidoFerias] auth.num:', auth?.num);
-
     /* ── Carregar pedidos ─────────────────────────────── */
-    // ✅ CORRIGIDO: useEffect inline, não useCallback com [auth]
     useEffect(() => {
         if (!auth?.num) return;
-
         const loadPedidos = async () => {
             setLoading(true);
             try {
@@ -198,11 +460,34 @@ export default function PedidoFerias() {
                 setLoading(false);
             }
         };
-
         loadPedidos();
-    }, [auth?.num]);  // ← só auth.num, não o objeto inteiro
+    }, [auth?.num]);
 
-    /* ── Função de reload (para após submeter/cancelar) ── */
+    /* ── Carregar saldo ───────────────────────────────── */
+    const loadSaldo = async () => {
+        if (!auth?.num) return;
+        try {
+            const r = await fetchPost({
+                url: `${API_URL}/rponto/sqlp/`,
+                withCredentials: true,
+                parameters: { method: 'FeriasSaldo' },
+                filter: { num: auth.num }
+            });
+            if (r.data?.status === 'success' && r.data.rows?.length > 0) {
+                const anoAtual = new Date().getFullYear();
+                const saldoAno = r.data.rows.find(s => s.ano === anoAtual) || r.data.rows[0];
+                setSaldo(saldoAno);
+            }
+        } catch (e) {
+            console.error('[PedidoFerias] erro ao carregar saldo:', e);
+        }
+    };
+
+    useEffect(() => {
+        if (auth?.num) loadSaldo();
+    }, [auth?.num]);
+
+    /* ── Reload ───────────────────────────────────────── */
     const reloadPedidos = async () => {
         if (!auth?.num) return;
         setLoading(true);
@@ -219,25 +504,23 @@ export default function PedidoFerias() {
         } finally {
             setLoading(false);
         }
+        loadSaldo();
     };
 
-    /* ── Submeter pedido ──────────────────────────────── */
+    /* ── Submeter novo pedido ─────────────────────────── */
     const onFinish = async (values) => {
         if (!auth?.num) {
             openNotification('error', 'top', 'Erro', 'Utilizador não identificado');
             return;
         }
-
         const [ini, fim] = values.periodo;
+        const diasPedidos = calcDiasUteis([ini, fim]);
 
-        // ✅ Debug — confirma o que vai ser enviado
-        console.log('[PedidoFerias] a submeter:', {
-            num:      auth.num,
-            dep:      auth.dep || '',
-            data_ini: ini.format('YYYY-MM-DD'),
-            data_fim: fim.format('YYYY-MM-DD'),
-            obs:      values.obs || ''
-        });
+        if (saldo && diasPedidos > saldo.ferias_saldo) {
+            openNotification('warning', 'top', 'Saldo insuficiente',
+                `Tem ${saldo.ferias_saldo} dias disponíveis mas está a pedir ${diasPedidos}.`);
+            return;
+        }
 
         setSubmitting(true);
         try {
@@ -246,16 +529,13 @@ export default function PedidoFerias() {
                 withCredentials: true,
                 parameters: { method: 'FeriasSubmeter' },
                 filter: {
-                    num:      auth.num,                  // ← "F00242"
+                    num:      auth.num,
                     dep:      auth.dep || '',
-                    data_ini: ini.format('YYYY-MM-DD'),  // ← "2026-03-18"
-                    data_fim: fim.format('YYYY-MM-DD'),  // ← "2026-03-19"
+                    data_ini: ini.format('YYYY-MM-DD'),
+                    data_fim: fim.format('YYYY-MM-DD'),
                     obs:      values.obs || ''
                 }
             });
-
-            console.log('[PedidoFerias] resposta:', r?.data);
-
             if (r.data?.status === 'success') {
                 openNotification('success', 'top', 'Pedido submetido!', r.data.title);
                 form.resetFields();
@@ -272,7 +552,7 @@ export default function PedidoFerias() {
         }
     };
 
-    /* ── Cancelar pedido ──────────────────────────────── */
+    /* ── Cancelar directamente (pendente/aprovado_chefe) ── */
     const handleCancelar = (pedido) => {
         Modal.confirm({
             title:      'Cancelar pedido?',
@@ -301,12 +581,61 @@ export default function PedidoFerias() {
         });
     };
 
-    /* ── KPIs ──────────────────────────────���──────────── */
+    /* ── Pedir cancelamento ao RH (aprovado_rh) ───────── */
+    const handlePedirCancelamento = async (obs) => {
+        const pedido = modalCancelamento.pedido;
+        try {
+            const r = await fetchPost({
+                url: `${API_URL}/rponto/sqlp/`,
+                withCredentials: true,
+                parameters: { method: 'FeriasPedirCancelamento' },
+                filter: { id: pedido.id, num: auth.num, obs }
+            });
+            if (r.data?.status === 'success') {
+                openNotification('success', 'top', 'Pedido enviado', r.data.title);
+                setModalCancelamento({ visible: false, pedido: null });
+                reloadPedidos();
+            } else {
+                openNotification('error', 'top', 'Erro', r.data?.title);
+            }
+        } catch (e) {
+            openNotification('error', 'top', 'Erro', e.message);
+        }
+    };
+
+    /* ── Pedir troca de datas ao RH (aprovado_rh) ─────── */
+    const handlePedirTroca = async (obs, novasDatas) => {
+        const pedido = modalTroca.pedido;
+        try {
+            const r = await fetchPost({
+                url: `${API_URL}/rponto/sqlp/`,
+                withCredentials: true,
+                parameters: { method: 'FeriasPedirTroca' },
+                filter: {
+                    id:            pedido.id,
+                    num:           auth.num,
+                    obs:           obs,
+                    nova_data_ini: novasDatas[0].format('YYYY-MM-DD'),
+                    nova_data_fim: novasDatas[1].format('YYYY-MM-DD'),
+                }
+            });
+            if (r.data?.status === 'success') {
+                openNotification('success', 'top', 'Pedido enviado', r.data.title);
+                setModalTroca({ visible: false, pedido: null });
+                reloadPedidos();
+            } else {
+                openNotification('error', 'top', 'Erro', r.data?.title);
+            }
+        } catch (e) {
+            openNotification('error', 'top', 'Erro', e.message);
+        }
+    };
+
+    /* ── KPIs ─────────────────────────────────────────── */
     const pendentes  = rows.filter(r => r.estado === 'pendente').length;
     const aprovados  = rows.filter(r => r.estado === 'aprovado_rh').length;
     const rejeitados = rows.filter(r => r.estado.startsWith('rejeitado')).length;
 
-    /* ── Render ───────────────────────────────────────── */
     return (
         <div className="p-4 space-y-4 bg-gray-50 min-h-screen">
 
@@ -325,8 +654,10 @@ export default function PedidoFerias() {
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-                {/* ── Coluna esquerda — Formulário ── */}
+                {/* ── Coluna esquerda ── */}
                 <div className="lg:col-span-2 space-y-4">
+                    <CardSaldo saldo={saldo} />
+
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                         <h2 className="text-sm font-black text-slate-700 mb-4 flex items-center gap-2">
                             <PlusOutlined className="text-indigo-500" /> Novo pedido
@@ -351,11 +682,12 @@ export default function PedidoFerias() {
                                     message={
                                         nDias === 0
                                             ? 'Nenhum dia útil no período selecionado'
-                                            : <><strong>{nDias}</strong> dia{nDias !== 1 ? 's' : ''} útil{nDias !== 1 ? 'eis' : ''} de férias</>
+                                            : saldo && nDias > saldo.ferias_saldo
+                                                ? <><strong>{nDias}</strong> dias — <span className="text-red-600 font-bold">excede o saldo ({saldo.ferias_saldo}d)</span></>
+                                                : <><strong>{nDias}</strong> dia{nDias !== 1 ? 's' : ''} útil{nDias !== 1 ? 'eis' : ''} de férias</>
                                     }
-                                    type={nDias === 0 ? 'warning' : 'success'}
-                                    showIcon
-                                    className="rounded-lg mb-3"
+                                    type={nDias === 0 ? 'warning' : saldo && nDias > saldo.ferias_saldo ? 'error' : 'success'}
+                                    showIcon className="rounded-lg mb-3"
                                 />
                             )}
 
@@ -368,7 +700,8 @@ export default function PedidoFerias() {
 
                             <Button
                                 type="primary" htmlType="submit"
-                                loading={submitting} disabled={nDias === 0}
+                                loading={submitting}
+                                disabled={nDias === 0 || (saldo && nDias > saldo.ferias_saldo)}
                                 icon={<SendOutlined />} block size="large"
                                 className="bg-indigo-600 hover:bg-indigo-700 border-none font-bold rounded-xl mt-2"
                             >
@@ -377,7 +710,6 @@ export default function PedidoFerias() {
                         </Form>
                     </div>
 
-                    {/* Como funciona */}
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
                         <h2 className="text-xs font-black text-slate-600 uppercase mb-3">Como funciona?</h2>
                         <Timeline className="mt-2">
@@ -396,7 +728,6 @@ export default function PedidoFerias() {
                         </Timeline>
                     </div>
 
-                    {/* KPIs */}
                     {rows.length > 0 && (
                         <div className="grid grid-cols-3 gap-2">
                             {[
@@ -441,8 +772,15 @@ export default function PedidoFerias() {
                                 <YScroll style={{ maxHeight: 'calc(100vh - 320px)' }}>
                                     <div className="space-y-3">
                                         {rows.map(pedido => (
-                                            <CardPedido key={pedido.id} pedido={pedido} authNum={auth?.num}
-                                                        onCancelar={handleCancelar} onVerDetalhe={setDetalhe} />
+                                            <CardPedido
+                                                key={pedido.id}
+                                                pedido={pedido}
+                                                authNum={auth?.num}
+                                                onCancelar={handleCancelar}
+                                                onPedirCancelamento={p => setModalCancelamento({ visible: true, pedido: p })}
+                                                onPedirTroca={p => setModalTroca({ visible: true, pedido: p })}
+                                                onVerDetalhe={setDetalhe}
+                                            />
                                         ))}
                                     </div>
                                 </YScroll>
@@ -477,6 +815,22 @@ export default function PedidoFerias() {
                     </div>
                 )}
             </Drawer>
+
+            {/* Modal pedir cancelamento */}
+            <ModalPedirCancelamento
+                visible={modalCancelamento.visible}
+                pedido={modalCancelamento.pedido}
+                onConfirm={handlePedirCancelamento}
+                onCancel={() => setModalCancelamento({ visible: false, pedido: null })}
+            />
+
+            {/* Modal pedir troca */}
+            <ModalPedirTroca
+                visible={modalTroca.visible}
+                pedido={modalTroca.pedido}
+                onConfirm={handlePedirTroca}
+                onCancel={() => setModalTroca({ visible: false, pedido: null })}
+            />
         </div>
     );
 }
