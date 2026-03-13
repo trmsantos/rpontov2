@@ -1,86 +1,105 @@
-from django.contrib.auth import authenticate
-from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.views import APIView
+import re
+from django.contrib.auth.models import User
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from datetime import datetime, timedelta
-import openpyxl
-from openpyxl.styles import Font, Alignment
-from django.http import HttpResponse
+
+FUNC_USERNAME_RE = re.compile(r'^F\d{3,5}$', re.IGNORECASE)
 
 
-def exporta_excel_registos(request, registos, cols):
-    registos_export = agrupar_picagens_por_turno(registos)
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_lookup(request):
+    """
+    Passo 1: Utilizador envia o email.
+    Se encontrar um user com username FXXXXX e esse email, devolve o username.
+    """
+    email = (request.data.get('email') or '').strip().lower()
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Picagens"
+    if not email:
+        return Response({
+            'status': 'error',
+            'title':  'Introduza o seu email'
+        })
 
-    headers = [v['title'] if isinstance(v, dict) else v for v in cols.values()]
-    ws.append(headers)
+    try:
+        # Procurar user com este email e username no formato FXXXXX
+        users = User.objects.filter(email__iexact=email)
+        func_user = None
+        for u in users:
+            if FUNC_USERNAME_RE.match(u.username):
+                func_user = u
+                break
 
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal='center')
+        if not func_user:
+            return Response({
+                'status': 'error',
+                'title':  'Não foi encontrado nenhum colaborador com este email.'
+            })
+
+        return Response({
+            'status':     'success',
+            'username':   func_user.username,
+            'first_name': func_user.first_name or '',
+            'last_name':  func_user.last_name or '',
+        })
+
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'title':  f'Erro interno: {str(e)}'
+        })
 
 
-    for row in registos_export:
-        ws.append([row.get(k, '') for k in cols.keys()])
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request):
+    """
+    Passo 2: Utilizador define a nova password.
+    Recebe email + nova password. Valida novamente o email.
+    """
+    email        = (request.data.get('email') or '').strip().lower()
+    new_password = (request.data.get('new_password') or '').strip()
 
-    response = HttpResponse(
-        content=openpyxl.writer.excel.save_virtual_workbook(wb),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-    response['Content-Disposition'] = f'attachment; filename=registos_picagens.xlsx'
-    return response
+    if not email or not new_password:
+        return Response({
+            'status': 'error',
+            'title':  'Dados inválidos'
+        })
 
+    if len(new_password) < 6:
+        return Response({
+            'status': 'error',
+            'title':  'A palavra-passe deve ter pelo menos 6 caracteres'
+        })
+
+    try:
+        users = User.objects.filter(email__iexact=email)
+        func_user = None
+        for u in users:
+            if FUNC_USERNAME_RE.match(u.username):
+                func_user = u
+                break
+
+        if not func_user:
+            return Response({
+                'status': 'error',
+                'title':  'Utilizador não encontrado'
+            })
+
+        func_user.set_password(new_password)
+        func_user.save()
     
-def agrupar_picagens_por_turno(registos):
-    agrupados = []
-    for registo in registos:
-        picagens = []
-        for i in range(1, 9):
-            ss_key = f'ss_{i:02d}'
-            ty_key = f'ty_{i:02d}'
-            ss_val = registo.get(ss_key)
-            ty_val = registo.get(ty_key)
-            if ss_val:
-                # string para datetime se for preciso
-                dt_pic = ss_val if isinstance(ss_val, datetime) else datetime.strptime(ss_val, '%Y-%m-%d %H:%M:%S')
-                picagens.append({'dt': dt_pic, 'tipo': (ty_val or '').strip(), 'ordem': i})
-        if not picagens:
-            agrupados.append(registo)
-            continue
+        print(f"[RESET] Password alterada para user={func_user.username} via email={email}")
 
-        picagens = sorted(picagens, key=lambda x: x['dt'])
+        return Response({
+            'status':   'success',
+            'title':    'Palavra-passe alterada com sucesso!',
+            'username': func_user.username,
+        })
 
-        entrada = picagens[0]['dt']
-        saida = picagens[-1]['dt'] if len(picagens) > 1 else None
-
-        if len(picagens) > 1:
-            if entrada.hour >= 23 and saida and 0 <= saida.hour < 8 and (saida - entrada) < timedelta(hours=12):
-                data_turno = saida.date()  
-            elif saida and 23 <= saida.hour <= 23 and entrada.hour >= 16 and (saida - entrada) < timedelta(hours=12):
-                data_turno = entrada.date()  
-            elif saida and saida.hour == 0 and entrada.hour >= 16 and (saida - entrada) < timedelta(hours=12):
-                data_turno = entrada.date()
-            else:
-                data_turno = entrada.date()
-        else:
-            data_turno = entrada.date()
-
-        registo['data_turno'] = data_turno.strftime('%Y-%m-%d')
-        registo['hora_entrada'] = picagens[0]['dt'].strftime('%H:%M:%S')
-        registo['hora_saida'] = picagens[-1]['dt'].strftime('%H:%M:%S') if len(picagens) > 1 else ''
-        if len(picagens) > 1:
-            entrada_dt = picagens[0]['dt']
-            saida_dt = picagens[-1]['dt']
-            if saida_dt < entrada_dt:
-                saida_dt += timedelta(days=1)
-            duracao = (saida_dt - entrada_dt).total_seconds() / 3600
-            registo['duracao_turno'] = f"{duracao:.2f}h"
-        else:
-            registo['duracao_turno'] = ''
-        agrupados.append(registo)
-    return agrupados
-
-
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'title':  f'Erro: {str(e)}'
+        })

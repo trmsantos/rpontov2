@@ -1,12 +1,18 @@
+import re
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework import serializers
 from django.db import connections, transaction
+from django.contrib.auth import authenticate
 from support.database import encloseColumn, Filters, DBSql, TypeDml, fetchall, Check
 
 connMssqlName = "sqlserver"
 db = DBSql(connections[connMssqlName].alias)
+
+# Regex para validar username de funcionário: F seguido de dígitos (ex: F00242, F00012)
+FUNC_USERNAME_RE = re.compile(r'^F\d{3,5}$', re.IGNORECASE)
+
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     remember = serializers.BooleanField(required=False)
@@ -16,6 +22,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         super().__init__(*args, **kwargs)
 
     def validate(self, attrs):
+        username = attrs.get('username', '').strip()
+
+        # Bloquear login de users que não sejam funcionários
+        if not FUNC_USERNAME_RE.match(username):
+            raise serializers.ValidationError(
+                {'detail': 'Acesso restrito. Use o seu número de funcionário (ex: F00242).'}
+            )
+
         data = super().validate(attrs)
         if attrs.get('remember'):
             self.request.session.set_expiry(86400)
@@ -28,8 +42,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # ══════════════════════════════════════════════════════════
         # PASSO 1 — Número do funcionário
-        # Tenta primeiro pelo Sage X3 (email → AUTILIS)
-        # Fallback: usa o username do Django directamente (ex: "F00107")
         # ══════════════════════════════════════════════════════════
         num = ''
         try:
@@ -45,12 +57,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         except Exception as e:
             print(f"[WARN] Sage X3 não devolveu num para {user.email}: {e}")
 
-        # ── Fallback: username do Django já é o número (ex: "F00107") ──
+        # ── Fallback: username do Django já é o número ──
         if not num and user.username:
             uname = user.username.strip().upper()
-            # Aceita "F00107" ou apenas "107" ou "00107"
             if uname.startswith('F') and len(uname) >= 2:
-                num = uname  # já está no formato correcto
+                num = uname
             elif uname.isdigit():
                 num = f"F{uname.zfill(5)}"
             print(f"[FALLBACK] num obtido do username: {num}")
@@ -89,7 +100,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 key              = 'chefe'
                 permission_value = grp[1] if len(grp) == 2 else '200'
 
-                # ── deps_chefe — só corre se num está preenchido ───
                 if num and not deps_chefe:
                     try:
                         with connections[connMssqlName].cursor() as cur:
@@ -114,7 +124,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 elif not num:
                     print(f"[WARN] isChefe=True mas num está vazio — deps_chefe ficará []")
 
-            # ── Grupos legados "chefe_DEP#nivel" ───────────────────
             elif len(grp) == 2 and grp[0].startswith('chefe_'):
                 dep_code = grp[0].replace('chefe_', '').upper()
                 isChefe  = True
@@ -147,7 +156,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     items[key] = pv
 
         # ══════════════════════════════════════════════════════════
-        # PASSO 3 — dep e tp_hor do colaborador
+        # PASSO 3 — dep e tp_hor
         # ══════════════════════════════════════════════════════════
         dep    = ''
         tp_hor = ''
@@ -175,7 +184,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 print(f"[ERROR] Leitura dep/tp_hor para {num}: {e}")
 
         # ══════════════════════════════════════════════════════════
-        # PASSO 4 — Construir token final
+        # PASSO 4 — Token final
         # ══════════════════════════════════════════════════════════
         token['first_name'] = user.first_name
         token['last_name']  = user.last_name
