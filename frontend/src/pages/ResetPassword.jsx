@@ -66,7 +66,7 @@ export default function ResetPassword() {
                                 type="primary"
                                 size="large"
                                 block
-                                onClick={() => navigate('/login', { replace: true })}
+                                onClick={() => navigate('/app/login', { replace: true })}
                                 style={{
                                     height: 48, borderRadius: 8,
                                     background: '#4F46E5', borderColor: '#4F46E5', fontWeight: 700

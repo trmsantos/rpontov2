@@ -72,7 +72,7 @@ const ProtectedDPROD = ({ children }) => {
 /* ── Rotas ────────────────────────────────────────── */
 const RenderRouter = () => {
     const element = useRoutes([
-        /* ── Rota pública de login (sem layout) ── */
+
         {
             path: '/app/login',
             element: (
@@ -82,7 +82,13 @@ const RenderRouter = () => {
             )
         },
 
-        /* ── Todas as rotas privadas com GridLayout ── */
+        {
+            path: '/reset-password/:uid/:token',
+            element: (
+                <Suspense fallback={<Spin />}><ResetPassword /></Suspense>
+            )
+        },
+
         {
             path: '/app',
             element: (
@@ -154,9 +160,9 @@ const RenderRouter = () => {
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe /></Suspense> },
                 { path: "rh/registos-pessoal",
                   element: <Suspense fallback={<Spin />}><RegistosRHPessoal /></Suspense> },
-                  /* --reset da password -- */
+/*                   --reset da password -- 
                 { path: "reset-password/:uid/:token",
-                  element: <Suspense fallback={<Spin />}><ResetPassword /></Suspense> },
+                  element: <Suspense fallback={<Spin />}><ResetPassword /></Suspense> } */,
             ]
         },
         { path: '/', element: <Main />, children: [] },
