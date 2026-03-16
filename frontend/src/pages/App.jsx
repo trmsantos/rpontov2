@@ -29,6 +29,7 @@ const RegistosRHChefe       = lazy(() => import('./RegistosRHChefe'));
 const ColaboradoresDepartamento = lazy(() => import('./ColaboradoresDepartamento'));
 const RegistosRHPessoal     = lazy(() => import('./RegistosRHPessoal'));
 const TrocasTurno           = lazy(() => import('./TrocasTurno'));
+const ResetPassword         = lazy(() => import('./ResetPassword'));
 
 export const MediaContext = React.createContext({});
 export const SocketContext = React.createContext({});
@@ -153,6 +154,9 @@ const RenderRouter = () => {
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe /></Suspense> },
                 { path: "rh/registos-pessoal",
                   element: <Suspense fallback={<Spin />}><RegistosRHPessoal /></Suspense> },
+                  /* --reset da password -- */
+                { path: "reset-password/:uid/:token",
+                  element: <Suspense fallback={<Spin />}><ResetPassword /></Suspense> },
             ]
         },
         { path: '/', element: <Main />, children: [] },

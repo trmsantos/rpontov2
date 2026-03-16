@@ -15,6 +15,6 @@ urlpatterns = [
    re_path(r'^rponto/justificacao/upload/$', rponto.UploadJustificacaoPDF),
    re_path(r'^rponto/justificacao/pdf/(?P<justificacao_id>\d+)/$', rponto.DownloadJustificacaoPDF),
    re_path(r'^rponto/processamento/export/$', rponto.ExportProcessamentoExcel),
-   re_path(r'^password-reset/lookup/$',  views.password_reset_lookup),
-   re_path(r'^password-reset/confirm/$', views.password_reset_confirm),
+   re_path(r'^password-reset/request/$',  views.password_reset_request),
+   re_path(r'^password-reset/confirm/$',  views.password_reset_confirm),
 ]

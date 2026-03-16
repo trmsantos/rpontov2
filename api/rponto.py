@@ -2734,7 +2734,8 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
     DEPT_FOLDERS = {
         'DAF': 'Contabilidade e Financeiro', 'DSE': 'Manutenção e SI',
         'DPLAN': 'Planeamento', 'DPROD': 'Produção',
-        'DQUAL': 'Qualidade', 'DRH': 'RH', 'DTEC': 'Técnico'
+        'DQUAL': 'Qualidade', 'DRH': 'RH', 'DTEC': 'Técnico',
+        '99': '99'
     }
     base_path = '/mnt/Picagem/Picagem 2026_2'
     temp_dir = '/tmp/excel_sync'
@@ -2743,10 +2744,11 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
     KEY_COLS = ['num', 'dts']
     SS_COLS = [f'ss_{i:02d}' for i in range(1, 9)]
 
-    # ===== ESTILOS (mesmo do _export_clean) =====
+    # ===== ESTILOS =====
     cor_header = "4472C4"
     cor_clara = "FFFFFF"
     cor_escura = "D9E8F5"
+    cor_header_ferias = "7B2D8E"  # Roxo para a sheet de férias
 
     font_header = Font(bold=True, size=11, color="FFFFFF")
     font_normal = Font(size=10)
@@ -2762,8 +2764,9 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
     )
 
     fill_header = PatternFill(start_color=cor_header, end_color=cor_header, fill_type="solid")
+    fill_header_ferias = PatternFill(start_color=cor_header_ferias, end_color=cor_header_ferias, fill_type="solid")
 
-    # ===== COLUNAS E RENOMEAÇÃO (mesmo do _export_clean) =====
+    # ===== COLUNAS RAW DATA =====
     colunas_ordem = [
         'num', 'tp_hor', 'dep', 'dts', 'NOME', 'nt',
         'ss_01', 'ss_02', 'ss_03', 'ss_04',
@@ -2778,8 +2781,10 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
     headers_display = [colunas_display.get(c, c) for c in colunas_ordem]
     picagens_cols = ['P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08']
 
+    # ===== COLUNAS FÉRIAS =====
+    ferias_headers = ['Número', 'Data', 'Nome', 'Férias']
+
     def _normalize_df(df):
-        """Normaliza tipos de dados para garantir comparação correcta."""
         df = df.copy()
         if 'num' in df.columns:
             df['num'] = df['num'].astype(str).str.strip()
@@ -2796,12 +2801,9 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                     lambda x: str(x)[:19] if pd.notna(x) and str(x).strip() not in ('', 'None', 'nan', 'NaT') else None
                 )
                 df[col] = pd.to_datetime(clean_str, errors='coerce')
-            
         return df
 
     def _format_clean_sheet(ws, df_display, headers):
-        """Aplica a formatação do _export_clean a uma worksheet."""
-        # Header
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=header)
             cell.font = font_header
@@ -2809,15 +2811,12 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
             cell.alignment = alignment_center
             cell.border = thin_border
 
-        # Dados
         for row_idx, (_, row) in enumerate(df_display.iterrows(), 2):
             row_color = cor_clara if (row_idx - 2) % 2 == 0 else cor_escura
             fill_row = PatternFill(start_color=row_color, end_color=row_color, fill_type="solid")
 
             for col_idx, col_name in enumerate(headers, 1):
                 value = row[col_name]
-
-                # Tratar data para remover a parte da hora
                 if col_name == 'Data' and value:
                     value = str(value).split(' ')[0] if ' ' in str(value) else value
 
@@ -2831,7 +2830,6 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                 else:
                     cell.alignment = alignment_center
 
-        # Auto-ajuste de colunas
         for column_cells in ws.columns:
             max_length = 0
             column_letter = get_column_letter(column_cells[0].column)
@@ -2853,6 +2851,120 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
         ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
         ws.freeze_panes = "A2"
 
+    def _format_ferias_sheet(ws, df_ferias):
+        """Formata a sheet de Férias com estilo próprio."""
+        for col_idx, header in enumerate(ferias_headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = font_header
+            cell.fill = fill_header_ferias
+            cell.alignment = alignment_center
+            cell.border = thin_border
+
+        for row_idx, (_, row) in enumerate(df_ferias.iterrows(), 2):
+            row_color = cor_clara if (row_idx - 2) % 2 == 0 else cor_escura
+            fill_row = PatternFill(start_color=row_color, end_color=row_color, fill_type="solid")
+
+            for col_idx, col_name in enumerate(ferias_headers, 1):
+                value = row.get(col_name, '')
+
+                # Formatar data sem hora
+                if col_name == 'Data' and value:
+                    value = str(value)[:10]
+
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.font = font_normal
+                cell.fill = fill_row
+                cell.border = thin_border
+
+                if col_name in ['Número', 'Nome']:
+                    cell.alignment = alignment_left
+                else:
+                    cell.alignment = alignment_center
+
+        # Larguras
+        ws.column_dimensions['A'].width = 18  # Número
+        ws.column_dimensions['B'].width = 14  # Data
+        ws.column_dimensions['C'].width = 35  # Nome
+        ws.column_dimensions['D'].width = 10  # Férias
+
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(ferias_headers))}1"
+        ws.freeze_panes = "A2"
+
+    # ═══════════════════════════════════════════════════════
+    # CARREGAR FÉRIAS APROVADAS POR DEPARTAMENTO
+    # ═══════════════════════════════════════════════════════
+    ferias_por_dep = {}  # dep -> list of { num, data, nome }
+    try:
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    FP.num,
+                    FP.dep,
+                    CONVERT(VARCHAR(10), FP.data_ini, 23) AS data_ini,
+                    CONVERT(VARCHAR(10), FP.data_fim, 23) AS data_fim
+                FROM rponto.dbo.ferias_pedidos FP
+                WHERE FP.estado = 'aprovado_rh'
+                  AND FP.dep IS NOT NULL AND FP.dep != ''
+            """)
+            for row in cursor.fetchall():
+                num      = (row[0] or '').strip()
+                dep      = (row[1] or '').strip()
+                data_ini = row[2]
+                data_fim = row[3]
+
+                if not num or not dep or not data_ini or not data_fim:
+                    continue
+
+                if dep not in ferias_por_dep:
+                    ferias_por_dep[dep] = []
+
+                try:
+                    fi = datetime.strptime(data_ini[:10], '%Y-%m-%d').date()
+                    ff = datetime.strptime(data_fim[:10], '%Y-%m-%d').date()
+                    c = fi
+                    while c <= ff:
+                        # Só dias úteis (seg-sex)
+                        if c.weekday() < 5:
+                            ferias_por_dep[dep].append({
+                                'num':  num,
+                                'data': c.isoformat(),
+                            })
+                        c += timedelta(days=1)
+                except Exception:
+                    pass
+
+        print(f"[FÉRIAS] Carregadas férias para {len(ferias_por_dep)} departamentos")
+    except Exception as e:
+        print(f"[FÉRIAS ERROR] {e}")
+        traceback.print_exc()
+
+    # ═══════════════════════════════════════════════════════
+    # BUSCAR NOMES PARA AS FÉRIAS (do Sage)
+    # ═══════════════════════════════════════════════════════
+    todos_nums_ferias = set()
+    for dep_rows in ferias_por_dep.values():
+        for r in dep_rows:
+            todos_nums_ferias.add(r['num'])
+
+    # Complementar funcionarios_dict com nums que possam faltar
+    nums_faltam = todos_nums_ferias - set(funcionarios_dict.keys())
+    if nums_faltam:
+        try:
+            connSageName = connections[connSage100cName].cursor()
+            with connSageName as cursor_sage:
+                placeholders = ','.join(['%s'] * len(nums_faltam))
+                cursor_sage.execute(
+                    f"SELECT NFUNC, NOME FROM TRIMTEK_1GEP.dbo.FUNC1 WHERE NFUNC IN ({placeholders})",
+                    list(nums_faltam)
+                )
+                for row in cursor_sage.fetchall():
+                    funcionarios_dict[row[0].strip()] = row[1].strip()
+        except Exception as e:
+            print(f"[FÉRIAS NOMES] Erro ao buscar nomes: {e}")
+
+    # ═══════════════════════════════════════════════════════
+    # PROCESSAR CADA DEPARTAMENTO
+    # ═══════════════════════════════════════════════════════
     try:
         df_novo = pd.DataFrame(registos_db)
         df_novo['NOME'] = df_novo['num'].map(funcionarios_dict)
@@ -2877,7 +2989,7 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                 with open(remote_path, 'rb') as f_in, open(local_path, 'wb') as f_out:
                     f_out.write(f_in.read())
 
-                # 2. Carregar e Fazer MERGE
+                # 2. Carregar e Fazer MERGE — Raw Data
                 book = openpyxl.load_workbook(local_path, keep_vba=True)
 
                 if 'Raw Data' in book.sheetnames:
@@ -2886,15 +2998,12 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                     if len(data) > 0:
                         df_old = pd.DataFrame(data[1:], columns=data[0])
 
-                        # Detectar se o ficheiro antigo tem colunas raw ou display
                         if 'Número' in df_old.columns:
-                            # Ficheiro já está no formato display — reverter para raw para merge
                             reverse_map = {v: k for k, v in colunas_display.items()}
                             df_old.columns = [reverse_map.get(c, c) for c in df_old.columns]
 
                         df_old = _normalize_df(df_old)
 
-                        # Garantir colunas iguais
                         all_cols = list(dict.fromkeys(list(df_old.columns) + list(group_df.columns)))
                         for col in all_cols:
                             if col not in df_old.columns:
@@ -2917,8 +3026,7 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                 else:
                     df_final = group_df.copy()
 
-                # 3. Preparar o DataFrame no formato clean (display)
-                # Garantir coluna NOME
+                # 3. Preparar Raw Data — formato display
                 if 'NOME' not in df_final.columns:
                     df_final['NOME'] = df_final['num'].map(funcionarios_dict)
 
@@ -2926,26 +3034,85 @@ def _export_by_department_worker(registos_db, funcionarios_dict):
                 df_display = df_final[colunas_existentes].copy()
                 df_display.columns = [colunas_display.get(c, c) for c in df_display.columns]
 
-                # Limpeza de picagens 00:00:00
                 for col in picagens_cols:
                     if col in df_display.columns:
                         df_display[col] = df_display[col].apply(
                             lambda x: None if (x and isinstance(x, str) and '00:00:00' in x) else x
                         )
 
-                # 4. Criar a sheet "Raw Data" com formatação clean
+                # 4. Criar sheet "Raw Data"
                 ws = book.create_sheet(title='Raw Data')
                 _format_clean_sheet(ws, df_display, list(df_display.columns))
 
-                # 5. Guardar
+                # ═══════════════════════════════════════════════════
+                # 5. SHEET "Férias" — merge sem duplicados
+                # ═══════════════════════════════════════════════════
+                ferias_dep = ferias_por_dep.get(dept_code, [])
+
+                # Construir DataFrame novo de férias
+                df_ferias_novo = pd.DataFrame(ferias_dep) if ferias_dep else pd.DataFrame(columns=['num', 'data'])
+
+                if not df_ferias_novo.empty:
+                    df_ferias_novo['Nome']   = df_ferias_novo['num'].map(funcionarios_dict).fillna('')
+                    df_ferias_novo['Férias'] = 1
+                    df_ferias_novo = df_ferias_novo.rename(columns={'num': 'Número', 'data': 'Data'})
+                    df_ferias_novo = df_ferias_novo[ferias_headers]
+                else:
+                    df_ferias_novo = pd.DataFrame(columns=ferias_headers)
+
+                # Ler sheet existente "Férias" se existir (para merge)
+                if 'Férias' in book.sheetnames:
+                    sheet_ferias = book['Férias']
+                    ferias_data = list(sheet_ferias.values)
+                    if len(ferias_data) > 1:
+                        df_ferias_old = pd.DataFrame(ferias_data[1:], columns=ferias_data[0])
+                        # Normalizar
+                        df_ferias_old['Número'] = df_ferias_old['Número'].astype(str).str.strip()
+                        df_ferias_old['Data']   = df_ferias_old['Data'].astype(str).str.strip().str[:10]
+                        df_ferias_old['Férias'] = 1
+
+                        # Merge: concatenar e remover duplicados por Número + Data
+                        df_ferias_final = pd.concat([df_ferias_old, df_ferias_novo], ignore_index=True)
+                        df_ferias_final = df_ferias_final.drop_duplicates(
+                            subset=['Número', 'Data'], keep='last'
+                        )
+                    else:
+                        df_ferias_final = df_ferias_novo.copy()
+
+                    book.remove(sheet_ferias)
+                else:
+                    df_ferias_final = df_ferias_novo.copy()
+
+                # Normalizar e ordenar
+                if not df_ferias_final.empty:
+                    df_ferias_final['Número'] = df_ferias_final['Número'].astype(str).str.strip()
+                    df_ferias_final['Data']   = df_ferias_final['Data'].astype(str).str.strip().str[:10]
+                    df_ferias_final['Férias'] = 1
+                    # Garantir coluna Nome
+                    if 'Nome' in df_ferias_final.columns:
+                        df_ferias_final['Nome'] = df_ferias_final.apply(
+                            lambda r: r['Nome'] if r['Nome'] else funcionarios_dict.get(r['Número'], ''),
+                            axis=1
+                        )
+                    df_ferias_final = df_ferias_final.sort_values(
+                        ['Número', 'Data']
+                    ).reset_index(drop=True)
+
+                # Criar sheet "Férias"
+                ws_ferias = book.create_sheet(title='Férias')
+                _format_ferias_sheet(ws_ferias, df_ferias_final)
+
+                ferias_count = len(df_ferias_final)
+
+                # 6. Guardar
                 book.save(local_path)
 
-                # 6. Devolver à rede
+                # 7. Devolver à rede
                 with open(local_path, 'rb') as f_src, open(remote_path, 'wb') as f_dst:
                     f_dst.write(f_src.read())
 
                 os.remove(local_path)
-                print(f" {dept_code} atualizado ({len(df_final)} registos) — formato clean.")
+                print(f" {dept_code} atualizado ({len(df_final)} registos, {ferias_count} dias férias) — formato clean.")
 
             except Exception as e:
                 print(f" Erro em {dept_code}: {e}")
@@ -3017,7 +3184,7 @@ def _export_clean(registos_db, funcionarios_dict, d_start_str, d_end_str, fnum_f
     # ===== CRIAR WORKBOOK =====
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = 'Dados'
+    ws.title = 'Sheet1'
     
     # ===== ESTILOS =====
     cor_header = "4472C4"      # Azul

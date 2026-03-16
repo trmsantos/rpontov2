@@ -13,30 +13,16 @@ import jwt_decode from 'jwt-decode';
 
 const { Title, Text } = Typography;
 
-/* ═══════════════════════════════════════════════════════
-   MODAL RECUPERAR PASSWORD
-═══════════════════════════════════════════════════════ */
-const ModalRecuperarPassword = ({ visible, onClose }) => {
-    const [step, setStep] = useState(0);
-    // step 0: introduzir email
-    // step 1: definir nova password
-    // step 2: sucesso
 
-    const [email,       setEmail]       = useState('');
-    const [username,    setUsername]     = useState('');
-    const [fullName,    setFullName]    = useState('');
-    const [password,    setPassword]    = useState('');
-    const [confirm,     setConfirm]     = useState('');
-    const [loading,     setLoading]     = useState(false);
-    const [error,       setError]       = useState('');
+const ModalRecuperarPassword = ({ visible, onClose }) => {
+    const [email,   setEmail]   = useState('');
+    const [loading, setLoading] = useState(false);
+    const [sent,    setSent]    = useState(false);
+    const [error,   setError]   = useState('');
 
     const reset = () => {
-        setStep(0);
         setEmail('');
-        setUsername('');
-        setFullName('');
-        setPassword('');
-        setConfirm('');
+        setSent(false);
         setError('');
     };
 
@@ -45,54 +31,18 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
         onClose();
     };
 
-    /* ── Passo 1: procurar email ── */
-    const handleLookup = async () => {
+    const handleRequest = async () => {
         if (!email.trim()) return;
         setLoading(true);
         setError('');
         try {
-            const r = await axios.post('/api/password-reset/lookup/', {
+            await axios.post('/api/password-reset/request/', {
                 email: email.trim()
             });
-            if (r.data.status === 'success') {
-                setUsername(r.data.username);
-                setFullName(`${r.data.first_name} ${r.data.last_name}`.trim());
-                setStep(1);
-            } else {
-                setError(r.data.title);
-            }
+            // Resposta é sempre "success" por segurança
+            setSent(true);
         } catch (e) {
-            setError(e.response?.data?.title || 'Erro ao processar pedido');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    /* ── Passo 2: definir password ── */
-    const handleConfirm = async () => {
-        setError('');
-        if (password.length < 6) {
-            setError('A palavra-passe deve ter pelo menos 6 caracteres');
-            return;
-        }
-        if (password !== confirm) {
-            setError('As palavras-passe não coincidem');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const r = await axios.post('/api/password-reset/confirm/', {
-                email: email.trim(),
-                new_password: password
-            });
-            if (r.data.status === 'success') {
-                setStep(2);
-            } else {
-                setError(r.data.title);
-            }
-        } catch (e) {
-            setError(e.response?.data?.title || 'Erro ao alterar password');
+            setError(e.response?.data?.title || 'Erro ao processar pedido.');
         } finally {
             setLoading(false);
         }
@@ -110,40 +60,25 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
         >
             <div style={{ padding: '16px 0' }}>
                 {/* Header */}
-                <div style={{
-                    textAlign: 'center',
-                    marginBottom: 24
-                }}>
+                <div style={{ textAlign: 'center', marginBottom: 24 }}>
                     <div style={{
                         width: 56, height: 56, borderRadius: 16,
-                        background: 'linear-gradient(135deg, #4F46E5, #7C3AED)',
+                        background: sent
+                            ? 'linear-gradient(135deg, #059669, #10B981)'
+                            : 'linear-gradient(135deg, #4F46E5, #7C3AED)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         margin: '0 auto 12px', boxShadow: '0 4px 12px rgba(79,70,229,0.3)'
                     }}>
-                        {step === 2
+                        {sent
                             ? <CheckCircleOutlined style={{ color: '#fff', fontSize: 24 }} />
-                            : <LockOutlined style={{ color: '#fff', fontSize: 24 }} />
+                            : <LockOutlined       style={{ color: '#fff', fontSize: 24 }} />
                         }
                     </div>
                     <Title level={4} style={{ margin: 0 }}>
-                        {step === 2 ? 'Password alterada!' : 'Recuperar palavra-passe'}
+                        {sent ? 'Email enviado!' : 'Recuperar palavra-passe'}
                     </Title>
                 </div>
 
-                {/* Steps indicator */}
-                {step < 2 && (
-                    <Steps
-                        current={step}
-                        size="small"
-                        style={{ marginBottom: 24 }}
-                        items={[
-                            { title: 'Identificação' },
-                            { title: 'Nova password' },
-                        ]}
-                    />
-                )}
-
-                {/* Erro */}
                 {error && (
                     <Alert
                         message={error}
@@ -155,20 +90,17 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
                     />
                 )}
 
-                {/* ── STEP 0: Introduzir email ── */}
-                {step === 0 && (
+                {/* ── Formulário de email ── */}
+                {!sent && (
                     <div>
-                        <Text type="secondary" style={{
-                            display: 'block', marginBottom: 16, fontSize: 13
-                        }}>
-                            Introduza o email associado à sua conta de colaborador.
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 16, fontSize: 13 }}>
+                            Introduza o email associado à sua conta. Receberá um link para redefinir a palavra-passe.
                         </Text>
 
                         <div style={{ marginBottom: 16 }}>
                             <label style={{
-                                fontSize: 11, fontWeight: 700,
-                                color: '#666', textTransform: 'uppercase',
-                                display: 'block', marginBottom: 4
+                                fontSize: 11, fontWeight: 700, color: '#666',
+                                textTransform: 'uppercase', display: 'block', marginBottom: 4
                             }}>
                                 Email
                             </label>
@@ -178,7 +110,7 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
                                 size="large"
                                 value={email}
                                 onChange={e => setEmail(e.target.value)}
-                                onPressEnter={handleLookup}
+                                onPressEnter={handleRequest}
                                 type="email"
                                 style={{ borderRadius: 8 }}
                             />
@@ -191,163 +123,54 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
                             <Button
                                 type="primary"
                                 loading={loading}
-                                onClick={handleLookup}
+                                onClick={handleRequest}
                                 disabled={!email.trim()}
-                                style={{
-                                    borderRadius: 8,
-                                    background: '#4F46E5',
-                                    borderColor: '#4F46E5'
-                                }}
+                                style={{ borderRadius: 8, background: '#4F46E5', borderColor: '#4F46E5' }}
                             >
-                                Continuar
+                                Enviar link
                             </Button>
                         </div>
                     </div>
                 )}
 
-                {/* ── STEP 1: Definir nova password ── */}
-                {step === 1 && (
-                    <div>
-                        {/* Info do user encontrado */}
-                        <div style={{
-                            background: '#F0FDF4',
-                            border: '1px solid #BBF7D0',
-                            borderRadius: 12,
-                            padding: 16,
-                            marginBottom: 20,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 12
-                        }}>
-                            <div style={{
-                                width: 40, height: 40, borderRadius: '50%',
-                                background: 'linear-gradient(135deg, #4F46E5, #7C3AED)',
-                                color: '#fff',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                fontWeight: 900, fontSize: 16, flexShrink: 0
-                            }}>
-                                {(fullName || username).charAt(0)}
-                            </div>
-                            <div>
-                                <div style={{ fontWeight: 800, color: '#1E293B', fontSize: 14 }}>
-                                    {fullName || username}
-                                </div>
-                                <div style={{ fontSize: 12, color: '#64748B', fontFamily: 'monospace' }}>
-                                    {username}
-                                </div>
-                                <div style={{ fontSize: 11, color: '#94A3B8' }}>
-                                    {email}
-                                </div>
-                            </div>
-                        </div>
-
-                        <Text type="secondary" style={{
-                            display: 'block', marginBottom: 16, fontSize: 13
-                        }}>
-                            Defina a sua nova palavra-passe.
-                        </Text>
-
-                        <div style={{ marginBottom: 12 }}>
-                            <label style={{
-                                fontSize: 11, fontWeight: 700,
-                                color: '#666', textTransform: 'uppercase',
-                                display: 'block', marginBottom: 4
-                            }}>
-                                Nova palavra-passe
-                            </label>
-                            <Input.Password
-                                prefix={<LockOutlined style={{ color: '#bfbfbf' }} />}
-                                placeholder="Mínimo 6 caracteres"
-                                size="large"
-                                value={password}
-                                onChange={e => setPassword(e.target.value)}
-                                style={{ borderRadius: 8 }}
-                            />
-                        </div>
-
-                        <div style={{ marginBottom: 20 }}>
-                            <label style={{
-                                fontSize: 11, fontWeight: 700,
-                                color: '#666', textTransform: 'uppercase',
-                                display: 'block', marginBottom: 4
-                            }}>
-                                Confirmar palavra-passe
-                            </label>
-                            <Input.Password
-                                prefix={<LockOutlined style={{ color: '#bfbfbf' }} />}
-                                placeholder="Repetir palavra-passe"
-                                size="large"
-                                value={confirm}
-                                onChange={e => setConfirm(e.target.value)}
-                                onPressEnter={handleConfirm}
-                                style={{ borderRadius: 8 }}
-                            />
-                            {password && confirm && password !== confirm && (
-                                <Text type="danger" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-                                    As palavras-passe não coincidem
-                                </Text>
-                            )}
-                            {password && password.length > 0 && password.length < 6 && (
-                                <Text type="warning" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-                                    Mínimo 6 caracteres
-                                </Text>
-                            )}
-                        </div>
-
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-                            <Button
-                                icon={<ArrowLeftOutlined />}
-                                onClick={() => { setStep(0); setPassword(''); setConfirm(''); setError(''); }}
-                                style={{ borderRadius: 8 }}
-                            >
-                                Voltar
-                            </Button>
-                            <Button
-                                type="primary"
-                                loading={loading}
-                                onClick={handleConfirm}
-                                disabled={!password || !confirm || password !== confirm || password.length < 6}
-                                style={{
-                                    borderRadius: 8,
-                                    background: '#4F46E5',
-                                    borderColor: '#4F46E5'
-                                }}
-                            >
-                                Alterar palavra-passe
-                            </Button>
-                        </div>
-                    </div>
-                )}
-
-                {/* ── STEP 2: Sucesso ── */}
-                {step === 2 && (
+                {/* ── Confirmação de envio ── */}
+                {sent && (
                     <div style={{ textAlign: 'center' }}>
                         <Alert
-                            message="Palavra-passe alterada com sucesso!"
+                            message="Verifique o seu email"
                             description={
                                 <span>
-                                    Pode agora fazer login com o utilizador <strong>{username}</strong> e a nova palavra-passe.
+                                    Se <strong>{email}</strong> estiver associado a uma conta,
+                                    receberá um email com o link de recuperação em breve.
+                                    O link é válido durante <strong>1 hora</strong>.
                                 </span>
                             }
                             type="success"
                             showIcon
                             style={{ marginBottom: 20, borderRadius: 8, textAlign: 'left' }}
                         />
-                        <Button
-                            type="primary"
-                            size="large"
-                            block
-                            onClick={handleClose}
-                            style={{
-                                height: 48,
-                                borderRadius: 8,
-                                background: '#4F46E5',
-                                borderColor: '#4F46E5',
-                                fontWeight: 700
-                            }}
-                        >
-                            Ir para o Login
-                        </Button>
+                        <Text type="secondary" style={{ display: 'block', marginBottom: 20, fontSize: 12 }}>
+                            Não recebeu o email? Verifique a pasta de spam ou tente novamente.
+                        </Text>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                            <Button
+                                onClick={reset}
+                                style={{ borderRadius: 8 }}
+                            >
+                                Tentar novamente
+                            </Button>
+                            <Button
+                                type="primary"
+                                size="large"
+                                onClick={handleClose}
+                                style={{
+                                    borderRadius: 8, background: '#4F46E5',
+                                    borderColor: '#4F46E5', fontWeight: 700
+                                }}
+                            >
+                                Fechar
+                            </Button>
+                        </div>
                     </div>
                 )}
             </div>
