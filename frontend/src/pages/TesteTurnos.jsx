@@ -533,31 +533,30 @@ export default function TurnosHorario() {
                         motivo_justif:  motivo,
                     };
 
-                } else if (isGer) {
-                    const gerData = (dayData?.ger || []).find(g => g.num === numColaborador)
-                                 || (dayData?.ger || [])[0];
-                    if (gerData) {
-                        if (gerData.is_ferias) {
-                            turnoInfo = { turno_sigla: 'FER', is_ferias: true };
+                    } else if (isGer) {
+                        const gerData = (dayData?.ger || []).find(g => g.num === numColaborador);
+                        if (gerData) {
+                            if (gerData.is_ferias) {
+                                turnoInfo = { turno_sigla: 'FER', is_ferias: true };
+                            } else {
+                                const { hora_inicio, hora_fim } = resolverHoras(
+                                    gerData.turno_sigla,
+                                    gerData.hora_inicio,
+                                    gerData.hora_fim
+                                );
+                                turnoInfo = { ...gerData, hora_inicio, hora_fim };
+                            }
                         } else {
-                            const { hora_inicio, hora_fim } = resolverHoras(
-                                gerData.turno_sigla,
-                                gerData.hora_inicio,
-                                gerData.hora_fim
-                            );
-                            turnoInfo = { ...gerData, hora_inicio, hora_fim };
+                            turnoInfo = isFds
+                                ? { turno_sigla: 'DSC' }
+                                : {
+                                    turno_sigla: tpHor,
+                                    hora_inicio: '09:00',
+                                    hora_fim:    '18:00',
+                                    almoco_ini:  '13:00',
+                                    almoco_fim:  '14:00',
+                                };
                         }
-                    } else {
-                        turnoInfo = isFds
-                            ? { turno_sigla: 'DSC' }
-                            : {
-                                turno_sigla: tpHor,
-                                hora_inicio: '09:00',
-                                hora_fim:    '18:00',
-                                almoco_ini:  '13:00',
-                                almoco_fim:  '14:00',
-                              };
-                    }
 
                 } else if (isRotativo) {
                     const equipaData = (dayData?.equipas || []).find(e => e.equipa === tpHor);

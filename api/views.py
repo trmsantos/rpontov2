@@ -79,22 +79,24 @@ def password_reset_request(request):
     if not email:
         return Response({'status': 'error', 'title': 'Email obrigatório.'}, status=400)
 
-    try:
-        user = User.objects.get(email__iexact=email)
-    except User.DoesNotExist:
-        # Resposta genérica por segurança
+    users = User.objects.filter(
+        email__iexact=email,
+        username__istartswith='F'
+    )
+
+    if not users.exists():
         return Response({'status': 'success', 'title': 'Se o email existir, receberá um link.'})
+
+    user = users.first()
 
     uid   = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
 
-    # ── SÍNCRONO para debug (sem thread) ──
     try:
-        _send_reset_email_async(user, uid, token)  # chama direto, sem thread
-        print(f"[OK] Email enviado para {user.email}")
+        _send_reset_email_async(user, uid, token)
+        print(f"[OK] Email enviado para {user.email} (username: {user.username})")
     except Exception as e:
         print(f"[ERRO SMTP] {e}")
-        # Devolve o erro real ao frontend durante debug
         return Response({
             'status': 'error',
             'title': f'Erro SMTP: {str(e)}'

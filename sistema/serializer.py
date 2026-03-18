@@ -77,7 +77,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         isAdmin    = user.is_superuser
         isRH       = False
         isChefe    = False
-        deps_chefe = []
+        isChefeTurno       = False
+        deps_chefe         = []
+        equipas_chefeturno = []
 
         if 'all#100' not in groups:
             groups.append('all#100')
@@ -123,6 +125,37 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                         print(f"[ERROR] Leitura deps_chefe para {num}: {e}")
                 elif not num:
                     print(f"[WARN] isChefe=True mas num está vazio — deps_chefe ficará []")
+
+            # ── Chefe de Turno (grupo Django: chefeturno) ──
+            elif grp[0] == 'chefeturno':
+                isChefeTurno     = True
+                key              = 'chefeturno'
+                permission_value = grp[1] if len(grp) == 2 else '200'
+
+                if num and not equipas_chefeturno:
+                    try:
+                        with connections[connMssqlName].cursor() as cur:
+                            cur.execute("""
+                                SELECT RTRIM(LTRIM(equipa))
+                                FROM rponto.dbo.rh_chefes_turno
+                                WHERE num_chefe = %s
+                                  AND ativo = 1
+                                  AND (dt_fim IS NULL OR dt_fim >= GETDATE())
+                                ORDER BY equipa
+                            """, [num])
+                            equipas_chefeturno = [row[0] for row in cur.fetchall()]
+
+                        if equipas_chefeturno:
+                            print(f"[OK] {num} → equipas_chefeturno: {equipas_chefeturno}")
+                        else:
+                            print(
+                                f"[WARN] {num} está no grupo 'chefeturno' mas "
+                                f"não tem registo activo em rh_chefes_turno"
+                            )
+                    except Exception as e:
+                        print(f"[ERROR] Leitura equipas_chefeturno para {num}: {e}")
+                elif not num:
+                    print(f"[WARN] isChefeTurno=True mas num está vazio — equipas ficará []")
 
             elif len(grp) == 2 and grp[0].startswith('chefe_'):
                 dep_code = grp[0].replace('chefe_', '').upper()
@@ -186,17 +219,19 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # ══════════════════════════════════════════════════════════
         # PASSO 4 — Token final
         # ══════════════════════════════════════════════════════════
-        token['first_name'] = user.first_name
-        token['last_name']  = user.last_name
-        token['email']      = user.email
-        token['groups']     = groups
-        token['items']      = items
-        token['isAdmin']    = isAdmin
-        token['isRH']       = isRH
-        token['isChefe']    = isChefe
-        token['deps_chefe'] = deps_chefe
-        token['dep']        = dep
-        token['tp_hor']     = tp_hor
+        token['first_name']          = user.first_name
+        token['last_name']           = user.last_name
+        token['email']               = user.email
+        token['groups']              = groups
+        token['items']               = items
+        token['isAdmin']             = isAdmin
+        token['isRH']                = isRH
+        token['isChefe']             = isChefe
+        token['isChefeTurno']        = isChefeTurno
+        token['deps_chefe']          = deps_chefe
+        token['equipas_chefeturno']  = equipas_chefeturno
+        token['dep']                 = dep
+        token['tp_hor']              = tp_hor
 
         return token
 

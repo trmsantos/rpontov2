@@ -4,7 +4,8 @@ import { isRH } from "./commons";
 import {
     LogOut, User, Users, ChevronDown, Clock, Calendar,
     Briefcase, LayoutDashboard, BarChart2, BanknoteIcon,
-    FileText, Palmtree, ClipboardList, CheckSquare, ArrowLeftRight
+    FileText, Palmtree, ClipboardList, CheckSquare, ArrowLeftRight,
+    ShieldCheck
 } from 'lucide-react';
 import { ROOT_URL } from "config";
 
@@ -96,10 +97,14 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
         '/app/rh/justificacoes/pessoal', '/app/rh/trocas-turno'
     ];
     const rhPaths = [
-        '/app/rh/registos', '/app/rh/registosv3', '/app/rh/plan',
+        '/app/rh/registosv3', '/app/rh/plan',
         '/app/rh/justificacoes/rh', '/app/rh/departamentos', '/app/rh/processamento',
         '/app/rh/gestao-ferias', '/app/rh/justificacoes/chefe', '/app/rh/registos-chefe',
-        '/app/rh/colaboradores-departamento', '/app/rh/trocas-turno'
+        '/app/rh/colaboradores-departamento', '/app/rh/trocas-turno',
+        '/app/rh/gestao-chefes-turno'
+    ];
+    const chefeTurnoPaths = [
+        '/app/rh/justificacoes/chefeturno'
     ];
 
     const getInitialState = () => {
@@ -108,11 +113,13 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
             if (stored) return JSON.parse(stored);
         } catch { /* ignore */ }
         const currentPath = location.pathname;
-        const inRH        = rhPaths.some(p => currentPath === p);
-        const inAreaPessoal = areaPessoalPaths.some(p => currentPath === p);
+        const inRH             = rhPaths.some(p => currentPath === p);
+        const inAreaPessoal    = areaPessoalPaths.some(p => currentPath === p);
+        const inChefeTurno     = chefeTurnoPaths.some(p => currentPath === p);
         return {
-            areaPessoal: inAreaPessoal || !inRH,
+            areaPessoal: inAreaPessoal || (!inRH && !inChefeTurno),
             rh:          inRH,
+            chefeTurno:  inChefeTurno,
         };
     };
 
@@ -130,14 +137,30 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
         if (onToggleDrawer) onToggleDrawer();
     };
 
-    const isActive    = (path) => location.pathname === path;
-    const userIsRH    = isRH(auth);
-    const userIsChefe = auth?.isChefe;
+    const isActive         = (path) => location.pathname === path;
+    const userIsRH         = isRH(auth);
+    const userIsChefe      = auth?.isChefe;
+    const userIsChefeTurno = auth?.isChefeTurno;
 
     // Trocas de turno: APENAS chefe do departamento DPROD
-    // Colaboradores normais NÃO têm acesso — a troca é iniciada pelo chefe
     const temAcessoTrocas = userIsChefe &&
         (auth?.deps_chefe || []).map(d => String(d).trim()).includes('DPROD');
+
+    // Papel para o badge do footer
+    const getRoleLabel = () => {
+        if (userIsRH) return 'Recursos Humanos';
+        if (userIsChefe) return 'Chefe de Depart.';
+        if (userIsChefeTurno) return 'Chefe de Turno';
+        return 'Colaborador';
+    };
+
+    // Cor do avatar
+    const getAvatarGradient = () => {
+        if (userIsRH) return 'from-purple-500 to-purple-700';
+        if (userIsChefe) return 'from-amber-500 to-orange-600';
+        if (userIsChefeTurno) return 'from-teal-500 to-emerald-600';
+        return 'from-blue-500 to-blue-700';
+    };
 
     return (
         <>
@@ -179,17 +202,25 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                         >
                             Justificações
                         </MenuItem>
-                        {/* Trocas de turno — APENAS chefe do DPROD, visível na Área Pessoal */}
-{/*                         {temAcessoTrocas && (
-                            <MenuItem
-                                onClick={() => handleNavigation('/app/rh/trocas-turno')}
-                                icon={ArrowLeftRight}
-                                active={isActive('/app/rh/trocas-turno')}
-                            >
-                                Trocas de Turno
-                            </MenuItem>
-                        )} */}
                     </MenuSection>
+
+                    {/* ── Chefe de Turno (DPROD) ── */}
+                    {userIsChefeTurno && (
+                        <MenuSection
+                            title="Chefe de Turno"
+                            icon={ShieldCheck}
+                            isOpen={openSections.chefeTurno}
+                            onToggle={() => toggleSection('chefeTurno')}
+                        >
+                            <MenuItem
+                                onClick={() => handleNavigation('/app/rh/justificacoes/chefeturno')}
+                                icon={FileText}
+                                active={isActive('/app/rh/justificacoes/chefeturno')}
+                            >
+                                Justificações da Equipa
+                            </MenuItem>
+                        </MenuSection>
+                    )}
 
                     {/* ── Recursos Humanos ── */}
                     {(userIsRH || userIsChefe) && (
@@ -199,27 +230,15 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                             isOpen={openSections.rh}
                             onToggle={() => toggleSection('rh')}
                         >
+                            {/* === OPÇÕES EXCLUSIVAS RH === */}
                             {userIsRH && (
                                 <>
-                                    <MenuItem
-                                        onClick={() => window.location.assign(ROOT_URL)}
-                                        icon={LayoutDashboard}
-                                    >
-                                        Relógio de Ponto
-                                    </MenuItem>
-                                    <MenuItem
-                                        onClick={() => handleNavigation('/app/rh/registos', { num: null })}
-                                        icon={Clock}
-                                        active={isActive('/app/rh/registos')}
-                                    >
-                                        Registo de Picagens
-                                    </MenuItem>
                                     <MenuItem
                                         onClick={() => handleNavigation('/app/rh/registosv3', { num: null })}
                                         icon={Clock}
                                         active={isActive('/app/rh/registosv3')}
                                     >
-                                        Picagens V3
+                                        Picagens (Visão RH)
                                     </MenuItem>
                                     <MenuItem
                                         onClick={() => handleNavigation('/app/rh/plan', { num: null })}
@@ -243,6 +262,13 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                                         Departamentos e Chefes
                                     </MenuItem>
                                     <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/gestao-chefes-turno')}
+                                        icon={ShieldCheck}
+                                        active={isActive('/app/rh/gestao-chefes-turno')}
+                                    >
+                                        Gestão Chefes de Turno
+                                    </MenuItem>
+                                    <MenuItem
                                         onClick={() => handleNavigation('/app/rh/processamento')}
                                         icon={BarChart2}
                                         active={isActive('/app/rh/processamento')}
@@ -256,52 +282,74 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                                     >
                                         Gestão de Férias (RH)
                                     </MenuItem>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/registos-chefe')}
+                                        icon={Clock}
+                                        active={isActive('/app/rh/registos-chefe')}
+                                    >
+                                        Picagens do Departamento
+                                    </MenuItem>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/colaboradores-departamento')}
+                                        icon={ClipboardList}
+                                        active={isActive('/app/rh/colaboradores-departamento')}
+                                    >
+                                        Colaboradores do Dep.
+                                    </MenuItem>
                                 </>
                             )}
 
-                            <MenuItem
-                                onClick={() => handleNavigation('/app/rh/justificacoes/chefe')}
-                                icon={CheckSquare}
-                                active={isActive('/app/rh/justificacoes/chefe')}
-                            >
-                                {userIsRH ? 'Justificações (Chefe)' : 'Justificações do Dep.'}
-                            </MenuItem>
-
-                            {!userIsRH && (
-                                <MenuItem
-                                    onClick={() => handleNavigation('/app/rh/gestao-ferias')}
-                                    icon={Palmtree}
-                                    active={isActive('/app/rh/gestao-ferias')}
-                                >
-                                    Gestão de Férias (Chefe)
-                                </MenuItem>
-                            )}
-
-                            <MenuItem
-                                onClick={() => handleNavigation('/app/rh/registos-chefe')}
-                                icon={Clock}
-                                active={isActive('/app/rh/registos-chefe')}
-                            >
-                                Picagens do Departamento
-                            </MenuItem>
-
-                            <MenuItem
-                                onClick={() => handleNavigation('/app/rh/colaboradores-departamento')}
-                                icon={ClipboardList}
-                                active={isActive('/app/rh/colaboradores-departamento')}
-                            >
-                                Colaboradores do Dep.
-                            </MenuItem>
-
-                            {/* Trocas de turno na secção RH — apenas chefe do DPROD */}
-                            {temAcessoTrocas && (
-                                <MenuItem
-                                    onClick={() => handleNavigation('/app/rh/trocas-turno')}
-                                    icon={ArrowLeftRight}
-                                    active={isActive('/app/rh/trocas-turno')}
-                                >
-                                    Trocas de Turno (DPROD)
-                                </MenuItem>
+                            {/* === OPÇÕES PARA CHEFES DE DEPARTAMENTO (não-RH) === */}
+                            {!userIsRH && userIsChefe && (
+                                <>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/justificacoes/chefe')}
+                                        icon={CheckSquare}
+                                        active={isActive('/app/rh/justificacoes/chefe')}
+                                    >
+                                        Justificações do Dep.
+                                    </MenuItem>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/gestao-ferias')}
+                                        icon={Palmtree}
+                                        active={isActive('/app/rh/gestao-ferias')}
+                                    >
+                                        Gestão de Férias (Chefe)
+                                    </MenuItem>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/registos-chefe')}
+                                        icon={Clock}
+                                        active={isActive('/app/rh/registos-chefe')}
+                                    >
+                                        Picagens do Departamento
+                                    </MenuItem>
+                                    <MenuItem
+                                        onClick={() => handleNavigation('/app/rh/colaboradores-departamento')}
+                                        icon={ClipboardList}
+                                        active={isActive('/app/rh/colaboradores-departamento')}
+                                    >
+                                        Colaboradores do Dep.
+                                    </MenuItem>
+                                    {/* Gestão de Chefes de Turno — só chefes DPROD */}
+                                    {(auth?.deps_chefe || []).includes('DPROD') && (
+                                        <MenuItem
+                                            onClick={() => handleNavigation('/app/rh/gestao-chefes-turno')}
+                                            icon={ShieldCheck}
+                                            active={isActive('/app/rh/gestao-chefes-turno')}
+                                        >
+                                            Gestão Chefes de Turno
+                                        </MenuItem>
+                                    )}
+                                    {temAcessoTrocas && (
+                                        <MenuItem
+                                            onClick={() => handleNavigation('/app/rh/trocas-turno')}
+                                            icon={ArrowLeftRight}
+                                            active={isActive('/app/rh/trocas-turno')}
+                                        >
+                                            Trocas de Turno (DPROD)
+                                        </MenuItem>
+                                    )}
+                                </>
                             )}
                         </MenuSection>
                     )}
@@ -310,7 +358,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                 {/* Footer */}
                 <div className="shrink-0 p-3 border-t border-white/5">
                     <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/5 mb-1.5 hover:bg-white/8 transition-colors cursor-pointer group">
-                        <div className={`h-8 w-8 rounded-full bg-gradient-to-br ${userIsRH ? 'from-purple-500 to-purple-700' : userIsChefe ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-blue-700'} text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0`}>
+                        <div className={`h-8 w-8 rounded-full bg-gradient-to-br ${getAvatarGradient()} text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0`}>
                             {auth?.first_name?.charAt(0) || 'U'}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -318,7 +366,7 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                                 {auth?.first_name} {auth?.last_name}
                             </p>
                             <p className="text-[10px] text-slate-500 truncate leading-tight">
-                                {userIsRH ? 'Recursos Humanos' : userIsChefe ? 'Chefe de Depart.' : 'Colaborador'}
+                                {getRoleLabel()}
                             </p>
                         </div>
                     </div>

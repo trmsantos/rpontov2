@@ -1,6 +1,6 @@
 import React, { useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
-import { Drawer, Input, Image, Form, Button, Alert, Spin } from 'antd';
+import { Drawer, Input, Image, Form, Button, Alert, Spin, Select } from 'antd';
 import {
     CameraOutlined, SyncOutlined, SaveOutlined,
     CloseOutlined, UserOutlined, WarningOutlined, ExclamationCircleOutlined,
@@ -215,29 +215,24 @@ const InvalidRecords = ({ openNotification }) => {
     );
 };
 
-
-
+/* ─── DateTime24Input ─── */
 const DateTime24Input = ({ value, onChange, disabled }) => {
     const parse = (v) => {
         if (!v) return { date: '', hour: '', min: '' };
         const s = String(v).trim().replace('T', ' ');
         const [d = '', t = ''] = s.split(' ');
         const [h = '', m = ''] = t.split(':');
-        return {
-            date: d,
-            hour: h.padStart(2, '0'),
-            min:  m.padStart(2, '0')
-        };
+        return { date: d, hour: h.padStart(2, '0'), min: m.padStart(2, '0') };
     };
 
     const { date, hour, min } = parse(value);
 
     const emit = (newDate, newHour, newMin) => {
-        const d = newDate  !== undefined ? newDate  : date;
-        const h = newHour  !== undefined ? newHour  : hour;
-        const m = newMin   !== undefined ? newMin   : min;
+        const d = newDate !== undefined ? newDate : date;
+        const h = newHour !== undefined ? newHour : hour;
+        const m = newMin  !== undefined ? newMin  : min;
         if (!d && !h && !m) { onChange(null); return; }
-        onChange(`${d || ''}T${(h || '00').padStart(2,'0')}:${(m || '00').padStart(2,'0')}`);
+        onChange(`${d || ''}T${(h || '00').padStart(2, '0')}:${(m || '00').padStart(2, '0')}`);
     };
 
     const hours   = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
@@ -248,44 +243,22 @@ const DateTime24Input = ({ value, onChange, disabled }) => {
 
     return (
         <div className="flex items-center gap-1">
-            {/* Data */}
-            <input
-                type="date"
-                value={date}
-                disabled={disabled}
+            <input type="date" value={date} disabled={disabled}
                 onChange={e => emit(e.target.value, undefined, undefined)}
-                className={`flex-1 ${selectCls}`}
-            />
-
-            {/* Separador */}
+                className={`flex-1 ${selectCls}`} />
             <span className="text-slate-400 font-bold text-sm shrink-0">às</span>
-
-            {/* Horas */}
-            <select
-                value={hour}
-                disabled={disabled}
+            <select value={hour} disabled={disabled}
                 onChange={e => emit(undefined, e.target.value, undefined)}
-                className={`w-[62px] ${selectCls}`}
-            >
+                className={`w-[62px] ${selectCls}`}>
                 <option value="">HH</option>
-                {hours.map(h => (
-                    <option key={h} value={h}>{h}</option>
-                ))}
+                {hours.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
-
             <span className="text-slate-400 font-bold shrink-0">:</span>
-
-            {/* Minutos */}
-            <select
-                value={min}
-                disabled={disabled}
+            <select value={min} disabled={disabled}
                 onChange={e => emit(undefined, undefined, e.target.value)}
-                className={`w-[62px] ${selectCls}`}
-            >
+                className={`w-[62px] ${selectCls}`}>
                 <option value="">MM</option>
-                {minutes.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                ))}
+                {minutes.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
         </div>
     );
@@ -303,7 +276,6 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
         { value: "out", label: "Saída" }
     ];
 
-    // Inicializa o array de picagens a partir do record
     useEffect(() => {
         if (!record) return;
         const items = [];
@@ -312,7 +284,6 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
             const ss = record[`ss_${padded}`];
             const ty = record[`ty_${padded}`];
             if (ss || ty) {
-                // Normaliza para YYYY-MM-DDTHH:MM
                 let ssNorm = '';
                 if (ss) {
                     const s = String(ss).trim().replace('T', ' ');
@@ -329,61 +300,24 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
     const updatePicagem = (idx, field, val) =>
         setPicagens(prev => prev.map((p, i) => i === idx ? { ...p, [field]: val } : p));
 
-    const moveUp = (idx) => {
-        if (idx === 0) return;
-        setPicagens(prev => {
-            const next = [...prev];
-            [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-            return next;
-        });
-    };
-
-    const moveDown = (idx) => {
-        setPicagens(prev => {
-            if (idx >= prev.length - 1) return prev;
-            const next = [...prev];
-            [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-            return next;
-        });
-    };
-
-    const removePicagem = (idx) => {
-        setPicagens(prev => {
-            const next = prev.filter((_, i) => i !== idx);
-            return next.length === 0 ? [{ ss: '', ty: '' }] : next;
-        });
-    };
-
-    const addPicagem = () => {
-        if (picagens.length >= 8) return;
-        setPicagens(prev => [...prev, { ss: '', ty: '' }]);
-    };
+    const moveUp   = (idx) => { if (idx === 0) return; setPicagens(prev => { const n=[...prev]; [n[idx-1],n[idx]]=[n[idx],n[idx-1]]; return n; }); };
+    const moveDown = (idx) => { setPicagens(prev => { if (idx>=prev.length-1) return prev; const n=[...prev]; [n[idx],n[idx+1]]=[n[idx+1],n[idx]]; return n; }); };
+    const removePicagem = (idx) => setPicagens(prev => { const n=prev.filter((_,i)=>i!==idx); return n.length===0?[{ss:'',ty:''}]:n; });
+    const addPicagem = () => { if (picagens.length >= 8) return; setPicagens(prev => [...prev, { ss: '', ty: '' }]); };
 
     const handleSave = async () => {
         submitting.trigger();
         setFormStatus({ error: [] });
         try {
-            const payload = {
-                num: record.num,
-                dts: record.dts ? String(record.dts).slice(0, 10) : ''
-            };
+            const payload = { num: record.num, dts: record.dts ? String(record.dts).slice(0, 10) : '' };
             for (let i = 1; i <= 8; i++) {
                 const padded = String(i).padStart(2, '0');
                 const item = picagens[i - 1];
                 payload[`ss_${padded}`] = item?.ss || null;
                 payload[`ty_${padded}`] = item?.ty || null;
             }
-
-            await fetchPost({
-                url: `${API_URL}/rponto/sqlp/`,
-                withCredentials: true,
-                parameters: { method: "UpdatePicagem" },
-                filter: { payload }
-            });
-
+            await fetchPost({ url: `${API_URL}/rponto/sqlp/`, withCredentials: true, parameters: { method: "UpdatePicagem" }, filter: { payload } });
             openNotification("success", 'top', "Sucesso", "Registo actualizado com sucesso!");
-
-            // Construir registo actualizado para patch na tabela (sem refresh)
             const updatedRecord = { ...record };
             for (let i = 1; i <= 8; i++) {
                 const padded = String(i).padStart(2, '0');
@@ -402,98 +336,58 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
 
     return (
         <div className="flex flex-col h-full bg-slate-50">
-            {/* Cabeçalho do registo */}
             <div className="px-5 py-4 bg-white border-b border-slate-100">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold text-slate-600 text-sm">
-                        {record?.num}
-                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold text-slate-600 text-sm">{record?.num}</div>
                     <div>
                         <p className="font-bold text-slate-800">{record?.nome_colaborador || record?.num}</p>
                         <p className="text-xs text-slate-500">{record?.dts ? String(record.dts).slice(0, 10) : '—'}</p>
                     </div>
                 </div>
             </div>
-
             {formStatus.error.length > 0 && (
                 <Alert message={formStatus.error.join(", ")} type="error" closable onClose={() => setFormStatus({ error: [] })} className="mx-4 mt-4" />
             )}
-
             <YScroll className="flex-1">
                 <div className="p-5">
                     <Spin spinning={submitting.state}>
-                        {/* Header da secção */}
                         <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center justify-between">
                             <span>Picagens do dia</span>
                             {picagens.length < 8 && (
-                                <button
-                                    onClick={addPicagem}
-                                    disabled={submitting.state}
-                                    className="flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg text-xs font-bold transition-colors disabled:opacity-40"
-                                >
+                                <button onClick={addPicagem} disabled={submitting.state}
+                                    className="flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg text-xs font-bold transition-colors disabled:opacity-40">
                                     <PlusOutlined /> Adicionar
                                 </button>
                             )}
                         </div>
-
                         <div className="space-y-2">
                             {picagens.map((p, idx) => (
                                 <div key={idx} className="flex items-start gap-2 p-3 bg-white rounded-xl border border-slate-200 hover:border-blue-200 transition-colors">
-                                    {/* Badge de posição */}
-                                    <span className="w-6 h-6 rounded-lg bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600 mt-1 shrink-0">
-                                        {idx + 1}
-                                    </span>
-
-                                    {/* Inputs */}
+                                    <span className="w-6 h-6 rounded-lg bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600 mt-1 shrink-0">{idx + 1}</span>
                                     <div className="flex-1 min-w-0 space-y-2">
                                         <div>
                                             <p className="text-[10px] text-slate-400 mb-1 font-medium">Data e Hora (24h)</p>
-                                            <DateTime24Input
-                                                value={p.ss}
-                                                onChange={val => updatePicagem(idx, 'ss', val || '')}
-                                                disabled={submitting.state}
-                                            />
+                                            <DateTime24Input value={p.ss} onChange={val => updatePicagem(idx, 'ss', val || '')} disabled={submitting.state} />
                                         </div>
                                         <div>
                                             <p className="text-[10px] text-slate-400 mb-1 font-medium">Tipo</p>
-                                            <select
-                                                value={p.ty}
-                                                onChange={e => updatePicagem(idx, 'ty', e.target.value)}
-                                                disabled={submitting.state}
-                                                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white text-slate-700
-                                                           focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
-                                            >
-                                                {typeOptions.map(t => (
-                                                    <option key={t.value} value={t.value}>{t.label}</option>
-                                                ))}
+                                            <select value={p.ty} onChange={e => updatePicagem(idx, 'ty', e.target.value)} disabled={submitting.state}
+                                                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50">
+                                                {typeOptions.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                                             </select>
                                         </div>
                                     </div>
-
-                                    {/* Controlos de ordem / remover */}
                                     <div className="flex flex-col gap-1 shrink-0 mt-1">
-                                        <button
-                                            onClick={() => moveUp(idx)}
-                                            disabled={idx === 0 || submitting.state}
-                                            title="Mover para cima"
-                                            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-                                        >
+                                        <button onClick={() => moveUp(idx)} disabled={idx === 0 || submitting.state} title="Mover para cima"
+                                            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-20 disabled:cursor-not-allowed transition-colors">
                                             <ArrowUpOutlined style={{ fontSize: 11 }} />
                                         </button>
-                                        <button
-                                            onClick={() => moveDown(idx)}
-                                            disabled={idx === picagens.length - 1 || submitting.state}
-                                            title="Mover para baixo"
-                                            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-                                        >
+                                        <button onClick={() => moveDown(idx)} disabled={idx === picagens.length - 1 || submitting.state} title="Mover para baixo"
+                                            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded disabled:opacity-20 disabled:cursor-not-allowed transition-colors">
                                             <ArrowDownOutlined style={{ fontSize: 11 }} />
                                         </button>
-                                        <button
-                                            onClick={() => removePicagem(idx)}
-                                            disabled={submitting.state}
-                                            title="Remover"
-                                            className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded disabled:opacity-20 transition-colors"
-                                        >
+                                        <button onClick={() => removePicagem(idx)} disabled={submitting.state} title="Remover"
+                                            className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded disabled:opacity-20 transition-colors">
                                             <DeleteOutlined style={{ fontSize: 11 }} />
                                         </button>
                                     </div>
@@ -503,12 +397,10 @@ const FixRecord = ({ record, openNotification, onSave, onCancel }) => {
                     </Spin>
                 </div>
             </YScroll>
-
             <div className="shrink-0 p-4 border-t border-slate-100 bg-white flex justify-end gap-2">
                 <Button onClick={onCancel} icon={<CloseOutlined />} className="rounded-lg">Cancelar</Button>
-                <Button type="primary" onClick={handleSave} loading={submitting.state} icon={<SaveOutlined />} className="rounded-lg bg-blue-600 border-0 hover:bg-blue-700">
-                    Guardar alterações
-                </Button>
+                <Button type="primary" onClick={handleSave} loading={submitting.state} icon={<SaveOutlined />}
+                    className="rounded-lg bg-blue-600 border-0 hover:bg-blue-700">Guardar alterações</Button>
             </div>
         </div>
     );
@@ -534,11 +426,8 @@ const PicagemTypeFilter = ({ value, onChange }) => {
     return (
         <div className="flex items-center rounded-lg border border-slate-200 overflow-hidden shadow-sm">
             {options.map(opt => (
-                <button
-                    key={opt.key}
-                    onClick={() => onChange(opt.key)}
-                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold transition-all border-r border-slate-200 last:border-r-0 ${value === opt.key ? opt.active : opt.inactive}`}
-                >
+                <button key={opt.key} onClick={() => onChange(opt.key)}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold transition-all border-r border-slate-200 last:border-r-0 ${value === opt.key ? opt.active : opt.inactive}`}>
                     {opt.icon} {opt.label}
                 </button>
             ))}
@@ -546,34 +435,67 @@ const PicagemTypeFilter = ({ value, onChange }) => {
     );
 };
 
+/* ─── Hook: load dep + tp_hor options from backend ─── */
+function useFilterOptions() {
+    const [deps, setDeps]       = useState([]);
+    const [tpHors, setTpHors]   = useState([]);
+    const [loadingDeps, setLoadingDeps]   = useState(false);
+    const [loadingTpHors, setLoadingTpHors] = useState(false);
+
+    useEffect(() => {
+        setLoadingDeps(true);
+        fetchPost({
+            url: `${API_URL}/rponto/sqlp/`,
+            withCredentials: true,
+            parameters: { method: "DepartamentosDistinctList" },
+            filter: {},
+        })
+            .then(res => {
+                const rows = res?.data?.rows || res?.rows || [];  // ← FIX
+                setDeps(rows.map(r => ({ value: r.codigo, label: r.codigo })));
+            })
+            .catch(() => setDeps([]))
+            .finally(() => setLoadingDeps(false));
+    }, []);
+
+    useEffect(() => {
+        setLoadingTpHors(true);
+        fetchPost({
+            url: `${API_URL}/rponto/sqlp/`,
+            withCredentials: true,
+            parameters: { method: "TpHorDistinctList" },
+            filter: {},
+        })
+            .then(res => {
+                const rows = res?.data?.rows || res?.rows || [];  // ← FIX
+                setTpHors(rows.map(r => ({ value: r.codigo, label: r.codigo })));
+            })
+            .catch(() => setTpHors([]))
+            .finally(() => setLoadingTpHors(false));
+    }, []);
+
+    return { deps, tpHors, loadingDeps, loadingTpHors };
+}
+
 /* ─── MAIN COMPONENT ─── */
 export default function RegistosRHv3() {
     const { openNotification } = useContext(LayoutContext);
     const { auth } = useContext(AppContext);
-    const [showBiometrias, setShowBiometrias] = useState(false);
+    const [showBiometrias, setShowBiometrias]         = useState(false);
     const [showInvalidRecords, setShowInvalidRecords] = useState(false);
-    const [showFix, setShowFix] = useState(false);
-    const [selectedRecord, setSelectedRecord] = useState(null);
-    const [typeFilter, setTypeFilter] = useState('all');
+    const [showFix, setShowFix]                       = useState(false);
+    const [selectedRecord, setSelectedRecord]         = useState(null);
+    const [typeFilter, setTypeFilter]                 = useState('all');
 
-    // Referência para a função patchRow exposta pelo DataTable
+    const { deps, tpHors, loadingDeps, loadingTpHors } = useFilterOptions();
+
     const patchRowRef = useRef(null);
-
-    const handleRegisterPatch = useCallback((fn) => {
-        patchRowRef.current = fn;
-    }, []);
-
-    // Chave de linha para identificar o registo no patch
+    const handleRegisterPatch = useCallback((fn) => { patchRowRef.current = fn; }, []);
     const rowKey = (row) => `${row?.num}|${String(row?.dts || '').slice(0, 10)}`;
 
-    // Após guardar no drawer, aplica patch na linha da tabela sem refetch
     const handleRowSaved = useCallback((updatedRecord) => {
         if (patchRowRef.current) {
-            const key = rowKey(updatedRecord);
-            patchRowRef.current(
-                (row) => rowKey(row) === key,
-                updatedRecord
-            );
+            patchRowRef.current((row) => rowKey(row) === rowKey(updatedRecord), updatedRecord);
         }
         setShowFix(false);
         setSelectedRecord(null);
@@ -590,11 +512,8 @@ export default function RegistosRHv3() {
 
     const columns = useMemo(() => [
         {
-            title: 'Colaborador',
-            dataIndex: 'num',
-            sticky: true,
-            className: 'left-0',
-            style: { left: 0, minWidth: 180 },
+            title: 'Colaborador', dataIndex: 'num', sticky: true,
+            className: 'left-0', style: { left: 0, minWidth: 180 },
             render: (val, row) => (
                 <div className="flex items-center gap-2.5">
                     <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 text-white flex items-center justify-center font-bold text-xs shadow-sm shrink-0">
@@ -608,9 +527,19 @@ export default function RegistosRHv3() {
             )
         },
         {
-            title: 'Data',
-            dataIndex: 'dts',
-            style: { minWidth: 100 },
+            title: 'Dep.', dataIndex: 'dep', style: { minWidth: 70 },
+            render: (val) => val
+                ? <span className="inline-flex px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-bold">{val}</span>
+                : <span className="text-slate-300 text-xs">—</span>
+        },
+        {
+            title: 'Equipa', dataIndex: 'tp_hor', style: { minWidth: 70 },
+            render: (val) => val
+                ? <span className="inline-flex px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs font-bold">{val}</span>
+                : <span className="text-slate-300 text-xs">—</span>
+        },
+        {
+            title: 'Data', dataIndex: 'dts', style: { minWidth: 100 },
             render: (val) => (
                 <span className="inline-flex items-center gap-1 text-xs text-slate-600 bg-slate-50 px-2 py-1 rounded-lg font-medium whitespace-nowrap">
                     {dayjs(val).format('DD/MM/YYYY')}
@@ -628,8 +557,7 @@ export default function RegistosRHv3() {
                     )}
                 </span>
             ),
-            dataIndex: 'nt',
-            style: { minWidth: 90, textAlign: 'center' },
+            dataIndex: 'nt', style: { minWidth: 90, textAlign: 'center' },
             render: (val, row) => {
                 let visible = typeFilter === 'all' ? (val || 0) : 0;
                 if (typeFilter !== 'all') {
@@ -651,15 +579,13 @@ export default function RegistosRHv3() {
             style: { minWidth: 90, textAlign: 'center' },
             render: (val, row) => {
                 const typeVal = row[`ty_${String(i + 1).padStart(2, '0')}`];
-                const type = typeVal ? String(typeVal).trim().toLowerCase() : null;
-                if (!isPicagemVisible(typeVal, !!val)) {
-                    return <span className="text-slate-200 text-[10px]">—</span>;
-                }
+                const type    = typeVal ? String(typeVal).trim().toLowerCase() : null;
+                if (!isPicagemVisible(typeVal, !!val)) return <span className="text-slate-200 text-[10px]">—</span>;
                 return (
                     <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap
-                        ${type === 'in' ? 'bg-green-50 text-green-700 ring-1 ring-green-200' :
-                          type === 'out' ? 'bg-red-50 text-red-700 ring-1 ring-red-200' :
-                          'bg-slate-50 text-slate-600'}`}>
+                        ${type === 'in'  ? 'bg-green-50 text-green-700 ring-1 ring-green-200'
+                        : type === 'out' ? 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                        :                  'bg-slate-50 text-slate-600'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${type === 'in' ? 'bg-green-500' : type === 'out' ? 'bg-red-500' : 'bg-slate-400'}`} />
                         {dayjs(val).format('HH:mm')}
                     </div>
@@ -672,23 +598,63 @@ export default function RegistosRHv3() {
         <div className="flex items-center gap-2 flex-wrap">
             <DownloadReport filters={filters} />
             <PicagemTypeFilter value={typeFilter} onChange={setTypeFilter} />
-            <button onClick={() => setShowBiometrias(true)} className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm">
+            <button onClick={() => setShowBiometrias(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm">
                 <CameraOutlined /> Biometrias
             </button>
-            <button onClick={() => setShowInvalidRecords(true)} className="flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all shadow-sm">
+            <button onClick={() => setShowInvalidRecords(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-all shadow-sm">
                 <WarningOutlined /> Inválidos
             </button>
         </div>
     ), [typeFilter]);
 
-    const filterFields = useMemo(() => [
-        { name: 'fnum', label: 'Número', component: <Input placeholder="Ex: 123" size="middle" style={{ width: 130 }} /> },
-        { name: 'fdata', label: 'Período', component: <RangeDateField size="middle" /> }
-    ], []);
 
-    // ⚠️ CRÍTICO: memoizar apiConfig para evitar re-renders infinitos no DataTable
+    const filterFields = useMemo(() => [
+        {
+            name: 'fnum', label: 'Número',
+            component: <Input placeholder="Ex: F00016" size="middle" style={{ width: 130 }} />
+        },
+        {
+            name: 'fdep', label: 'Departamento',
+            exact: true,  // ← NÃO adicionar %wildcards%
+            component: (
+                <Select
+                    allowClear
+                    showSearch
+                    placeholder="Todos"
+                    loading={loadingDeps}
+                    options={deps}
+                    style={{ width: 150 }}
+                    size="middle"
+                />
+            )
+        },
+        {
+            name: 'ftp_hor', label: 'Equipa',
+            exact: true,  // ← NÃO adicionar %wildcards%
+            component: (
+                <Select
+                    allowClear
+                    showSearch
+                    placeholder="Todas"
+                    loading={loadingTpHors}
+                    options={tpHors}
+                    style={{ width: 120 }}
+                    size="middle"
+                />
+            )
+        },
+        {
+            name: 'fdata', label: 'Período',
+            component: <RangeDateField size="middle" />
+        },
+    ], [deps, tpHors, loadingDeps, loadingTpHors]);
+
+
+
     const apiConfig = useMemo(() => ({
-        url: `${API_URL}/rponto/sqlp/`,
+        url:    `${API_URL}/rponto/sqlp/`,
         method: 'RegistosRH',
         extraFilter: {
             isRH:             auth?.isRH    || false,
@@ -726,38 +692,25 @@ export default function RegistosRHv3() {
                 />
             </div>
 
-            {/* Biometrias Drawer */}
-            <Drawer
-                title={<div className="flex items-center gap-2 font-bold text-slate-800"><CameraOutlined className="text-blue-500" /> Biometrias</div>}
+            <Drawer title={<div className="flex items-center gap-2 font-bold text-slate-800"><CameraOutlined className="text-blue-500" /> Biometrias</div>}
                 width={720} open={showBiometrias} onClose={() => setShowBiometrias(false)}
-                destroyOnClose bodyStyle={{ padding: 0, background: '#f8fafc' }}
-            >
+                destroyOnClose styles={{ body: { padding: 0, background: '#f8fafc' } }}>
                 <Biometrias openNotification={openNotification} />
             </Drawer>
 
-            {/* Invalid Records Drawer */}
-            <Drawer
-                title={<div className="flex items-center gap-2 font-bold text-slate-800"><WarningOutlined className="text-amber-500" /> Registos Inválidos</div>}
+            <Drawer title={<div className="flex items-center gap-2 font-bold text-slate-800"><WarningOutlined className="text-amber-500" /> Registos Inválidos</div>}
                 width={720} open={showInvalidRecords} onClose={() => setShowInvalidRecords(false)}
-                destroyOnClose bodyStyle={{ padding: 0, background: '#f8fafc' }}
-            >
+                destroyOnClose styles={{ body: { padding: 0, background: '#f8fafc' } }}>
                 <InvalidRecords openNotification={openNotification} />
             </Drawer>
 
-            {/* Fix Record Drawer */}
-            <Drawer
-                title={<div className="flex items-center gap-2 font-bold text-slate-800"><ExclamationCircleOutlined className="text-red-500" /> Corrigir Registo</div>}
+            <Drawer title={<div className="flex items-center gap-2 font-bold text-slate-800"><ExclamationCircleOutlined className="text-red-500" /> Corrigir Registo</div>}
                 width={700} open={showFix}
                 onClose={() => { setShowFix(false); setSelectedRecord(null); }}
-                destroyOnClose bodyStyle={{ padding: 0, background: '#f8fafc' }}
-            >
+                destroyOnClose styles={{ body: { padding: 0, background: '#f8fafc' } }}>
                 {selectedRecord && (
-                    <FixRecord
-                        record={selectedRecord}
-                        openNotification={openNotification}
-                        onSave={handleRowSaved}
-                        onCancel={() => { setShowFix(false); setSelectedRecord(null); }}
-                    />
+                    <FixRecord record={selectedRecord} openNotification={openNotification}
+                        onSave={handleRowSaved} onCancel={() => { setShowFix(false); setSelectedRecord(null); }} />
                 )}
             </Drawer>
         </div>

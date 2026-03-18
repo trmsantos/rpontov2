@@ -19,7 +19,9 @@ const Turnos                = lazy(() => import('./TesteTurnos'));
 const JustificacoesPessoal  = lazy(() => import('./JustificacoesPessoal'));
 const JustificacoesChefe    = lazy(() => import('./JustificacoesChefe'));
 const JustificacoesRH       = lazy(() => import('./JustificacoesRH'));
+const JustificacoesChefeTurno = lazy(() => import('./JustificacoesChefeTurno'));
 const GestaoDepart          = lazy(() => import('./GestaoDepart'));
+const GestaoChefesTurno     = lazy(() => import('./GestaoChefeTurno'));
 const ProcessamentoSalarial = lazy(() => import('./ProcessamentoSalarial'));
 const PedidoFerias          = lazy(() => import('./PedidoFerias'));
 const GestaoFerias          = lazy(() => import('./GestaoFerias'));
@@ -57,7 +59,7 @@ const PrivateRoute = ({ children }) => {
         : <Navigate to="/app/login" replace />;
 };
 
-/* ── Guarda de rota: só DPROD ���─ */
+/* ── Guarda de rota: só DPROD ── */
 const ProtectedDPROD = ({ children }) => {
     const { auth, authLoading } = useContext(AppContext);
     if (authLoading) return <Spin />;
@@ -65,6 +67,24 @@ const ProtectedDPROD = ({ children }) => {
         auth?.dep === 'DPROD' ||
         (auth?.deps_chefe || []).includes('DPROD');
     return pertenceDPROD
+        ? children
+        : <Navigate to="/app/rh/ferias" replace />;
+};
+
+/* ── Guarda de rota: só Chefe de Turno ── */
+const ProtectedChefeTurno = ({ children }) => {
+    const { auth, authLoading } = useContext(AppContext);
+    if (authLoading) return <Spin />;
+    return auth?.isChefeTurno
+        ? children
+        : <Navigate to="/app/rh/ferias" replace />;
+};
+
+/* ── Guarda de rota: só RH ou Chefe de Departamento ── */
+const ProtectedRHouChefe = ({ children }) => {
+    const { auth, authLoading } = useContext(AppContext);
+    if (authLoading) return <Spin />;
+    return (auth?.isRH || auth?.isChefe)
         ? children
         : <Navigate to="/app/rh/ferias" replace />;
 };
@@ -114,6 +134,10 @@ const RenderRouter = () => {
                 { path: "rh/justificacoes/rh",
                   element: <Suspense fallback={<Spin />}><JustificacoesRH /></Suspense> },
 
+                /* ── Gestão Chefes de Turno (RH + Chefe DPROD) ── */
+                { path: "rh/gestao-chefes-turno",
+                  element: <Suspense fallback={<Spin />}><GestaoChefesTurno /></Suspense> },
+
                 /* ── Área Pessoal ── */
                 { path: "rh/registospessoal",
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe key="picagens-pessoal" /></Suspense> },
@@ -138,6 +162,17 @@ const RenderRouter = () => {
                 { path: "rh/colaboradores-departamento",
                   element: <Suspense fallback={<Spin />}><ColaboradoresDepartamento /></Suspense> },
 
+                /* ── Chefe de Turno — Justificações da equipa ── */
+                { path: "rh/justificacoes/chefeturno",
+                  element: (
+                      <ProtectedChefeTurno>
+                          <Suspense fallback={<Spin />}>
+                              <JustificacoesChefeTurno />
+                          </Suspense>
+                      </ProtectedChefeTurno>
+                  )
+                },
+
                 /* ── DPROD — Trocas de Turno ── */
                 { path: "rh/trocas-turno",
                   element: (
@@ -160,9 +195,6 @@ const RenderRouter = () => {
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe /></Suspense> },
                 { path: "rh/registos-pessoal",
                   element: <Suspense fallback={<Spin />}><RegistosRHPessoal /></Suspense> },
-/*                   --reset da password -- 
-                { path: "reset-password/:uid/:token",
-                  element: <Suspense fallback={<Spin />}><ResetPassword /></Suspense> } */,
             ]
         },
         { path: '/', element: <Main />, children: [] },
@@ -186,10 +218,12 @@ const App = () => {
             const authNormalizado = {
                 isAuthenticated: true,
                 ..._auth,
-                dep:       _auth.dep       || '',
-                tp_hor:    _auth.tp_hor    || '',
-                isChefe:   _auth.isChefe   || false,
-                deps_chefe: _auth.deps_chefe || [],
+                dep:                _auth.dep                || '',
+                tp_hor:             _auth.tp_hor             || '',
+                isChefe:            _auth.isChefe            || false,
+                isChefeTurno:       _auth.isChefeTurno       || false,
+                deps_chefe:         _auth.deps_chefe         || [],
+                equipas_chefeturno: _auth.equipas_chefeturno || [],
             };
 
             setAuth(authNormalizado);

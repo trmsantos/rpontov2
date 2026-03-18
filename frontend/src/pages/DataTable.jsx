@@ -14,7 +14,7 @@ const DataTable = ({
     defaultSort = [],
     rowClassName,
     openNotification,
-    // onRowPatch: opcional – callback para aplicar patches externos à tabela sem refetch
+    // onRowPatch - não utilizar (quebra o codigo todo)!!!!!!!!
     onRegisterPatch,
 }) => {
     const [rows, setRows] = useState([]);
@@ -24,9 +24,8 @@ const DataTable = ({
     const [activeFilters, setActiveFilters] = useState({});
     const [showFilters, setShowFilters] = useState(false);
     const [formFilter] = Form.useForm();
-
-    // Guardar referências estáveis para apiConfig e defaultSort
-    // para evitar que mudanças de referência disparem re-fetchs
+    const filterFieldsRef = useRef(filterFields);
+    useEffect(() => { filterFieldsRef.current = filterFields; });
     const apiConfigRef = useRef(apiConfig);
     const defaultSortRef = useRef(defaultSort);
     const pageSizeRef = useRef(pageSize);
@@ -38,12 +37,10 @@ const DataTable = ({
     useEffect(() => { pageSizeRef.current = pageSize; });
     useEffect(() => { openNotificationRef.current = openNotification; });
 
-    // Patch de linhas sem refetch (utilizado pelo componente pai após guardar edição)
     const patchRow = useCallback((matchFn, updatedData) => {
         setRows(prev => prev.map(row => matchFn(row) ? { ...row, ...updatedData } : row));
     }, []);
 
-    // Expor patchRow ao componente pai via callback
     useEffect(() => {
         if (onRegisterPatch) onRegisterPatch(patchRow);
     }, [onRegisterPatch, patchRow]);
@@ -53,12 +50,18 @@ const DataTable = ({
         const sort = defaultSortRef.current;
         const pgSize = pageSizeRef.current;
         const notify = openNotificationRef.current;
+        const fields = filterFieldsRef.current;  // ADD
+
+        // criar Set de campos exactos
+        const exactFields = new Set(
+            fields.filter(f => f.exact).map(f => f.name)
+        );
 
         setIsLoading(true);
         try {
             const filterPayload = { tstamp: Date.now() };
 
-            // 1) defaultFilter (fixos)
+            // defaultFilter (fixos)
             if (cfg.defaultFilter) {
                 Object.entries(cfg.defaultFilter).forEach(([key, value]) => {
                     if (value !== undefined && value !== null && value !== '') {
@@ -67,7 +70,7 @@ const DataTable = ({
                 });
             }
 
-            // 2) filtros do utilizador
+            //  filtros do utilizador
             Object.keys(filtersToUse).forEach(key => {
                 const value = filtersToUse[key];
 
@@ -84,13 +87,18 @@ const DataTable = ({
                         filterPayload.fdata = [`>=${startDate} 00:00:00`, `<=${endDate} 23:59:59`];
                     }
                 } else if (value && typeof value === 'string') {
-                    filterPayload[key] = value.includes('%') ? value : `%${value}%`;
+                    // se o campo é exact, enviar o valor tal como está
+                    if (exactFields.has(key)) {
+                        filterPayload[key] = value;
+                    } else {
+                        filterPayload[key] = value.includes('%') ? value : `%${value}%`;
+                    }
                 } else if (value !== undefined && value !== null && value !== '') {
                     filterPayload[key] = value;
                 }
             });
 
-            // 3) extraFilter (contexto auth/permissões)
+            //  extraFilter (contexto auth/permissões)
             if (cfg.extraFilter) {
                 Object.assign(filterPayload, cfg.extraFilter);
             }
@@ -196,9 +204,14 @@ const DataTable = ({
                 </div>
             </div>
 
-            {/* Painel de filtros */}
-            {showFilters && filterFields.length > 0 && (
-                <div className="bg-white px-4 py-3 rounded-xl shadow-sm border border-blue-100">
+
+           {/* Painel de filtros — sempre montado, visibilidade controlada por CSS */}
+            {filterFields.length > 0 && (
+                <div
+                    className={`bg-white px-4 py-3 rounded-xl shadow-sm border border-blue-100 transition-all ${
+                        showFilters ? 'block' : 'hidden'
+                    }`}
+                >
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Filtros de pesquisa</p>
                     <Form form={formFilter} layout="inline" onFinish={handleApplyFilters} initialValues={activeFilters} className="flex flex-wrap gap-3 items-end">
                         {filterFields.map(field => (

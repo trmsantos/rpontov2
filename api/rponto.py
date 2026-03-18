@@ -1118,70 +1118,45 @@ def RegistosRH(request, format=None):
     try:
         filter_data = request.data.get('filter', {})
 
-        # Filtros funcionais
         fnum_value  = filter_data.get('fnum')
         fdata_value = filter_data.get('fdata')
         fnome_value = (filter_data.get('fnome') or '').lower().strip()
+        fdep_value  = (filter_data.get('fdep') or '').strip()
+        ftphor_value = (filter_data.get('ftp_hor') or '').strip()
 
-        # Contexto/permissões
         is_rh      = bool(filter_data.get('isRH', False))
         is_admin   = bool(filter_data.get('isAdmin', False))
         is_chefe   = bool(filter_data.get('isChefe', False))
         deps_chefe = filter_data.get('deps_chefe', []) or []
 
-        # Colaborador autenticado (para restringir acesso pessoal)
         num_auth = str(filter_data.get('num') or '').strip()
 
-        # Fallback: RegistosRHPessoal envia apenas fnum quando num está vazio.
-        # Aceitar fnum como identidade SOMENTE quando não é RH/Admin/Chefe,
-        # para não interferir com a pesquisa por número dos outros papéis.
         if not num_auth and not is_rh and not is_admin and not is_chefe:
             fnum_fallback = str(filter_data.get('fnum') or '').replace('%', '').strip()
             if fnum_fallback:
                 num_auth = fnum_fallback
 
-        # Toggle para listagem geral no picagensv3
         is_picagens_v3_list = bool(filter_data.get('isPicagensV3List', False))
 
-        # ══════════════════════════════════════════════════════════
-        # SEGURANÇA
-        # ══════════════════════════════════════════════════════════
-
-        # Chefe sem departamentos -> vazio
         if is_chefe and not is_rh and not is_admin and not deps_chefe:
             return Response({
-                "rows": [],
-                "total": 0,
-                "page": 1,
-                "pageSize": 0,
-                "status": "success",
-                "warn": "Chefe sem departamentos configurados"
+                "rows": [], "total": 0, "page": 1, "pageSize": 0,
+                "status": "success", "warn": "Chefe sem departamentos configurados"
             })
 
-        # Colaborador sem num autenticado -> vazio
         if not is_rh and not is_admin and not is_chefe and not num_auth:
             return Response({
-                "rows": [],
-                "total": 0,
-                "page": 1,
-                "pageSize": 0,
-                "status": "success",
-                "warn": "Colaborador sem número autenticado"
+                "rows": [], "total": 0, "page": 1, "pageSize": 0,
+                "status": "success", "warn": "Colaborador sem número autenticado"
             })
 
-        # ══════════════════════════════════════════════════════════
-        # WHERE dinâmico
-        # ══════════════════════════════════════════════════════════
         where_parts = []
         parameters  = {}
 
-        # Restrição base por papel
         if is_rh or is_admin:
-            # RH/Admin: sem restrição base — filtros opcionais abaixo
             pass
 
         elif is_chefe:
-            # Chefe só vê os seus departamentos
             dep_placeholders = []
             for i, dep in enumerate(deps_chefe):
                 key = f"dep_{i}"
@@ -1190,44 +1165,52 @@ def RegistosRH(request, format=None):
             where_parts.append(f"RTRIM(LTRIM(TR.dep)) IN ({', '.join(dep_placeholders)})")
 
         else:
-            # Colaborador normal -> só o próprio
             where_parts.append("TR.num = %(num_auth)s")
             parameters["num_auth"] = num_auth
 
-        # Filtro por número
-        # Para colaborador normal: o fnum é a identidade (já tratado acima via num_auth),
-        # por isso só aplica fnum como filtro adicional para RH/Admin/Chefe.
         fnum_clean = str(fnum_value or '').replace('%', '').strip()
         if fnum_clean:
             if is_rh or is_admin or is_chefe:
                 where_parts.append("TR.num LIKE %(fnum)s")
                 parameters["fnum"] = f"%{fnum_clean}%"
-            # Para colaborador normal não adicionamos filtro fnum separado
-            # porque num_auth já garante "TR.num = %(num_auth)s" acima.
-            # Evita duplicação do mesmo num no WHERE.
 
-        _ = is_picagens_v3_list  # reconhecido mas sem restrição extra
+        _ = is_picagens_v3_list
 
-        # Filtro por data
+        if fdep_value:
+            if is_rh or is_admin:
+                where_parts.append("RTRIM(LTRIM(TR.dep)) = %(fdep)s")
+                parameters["fdep"] = fdep_value
+            elif is_chefe and fdep_value in [d.strip() for d in deps_chefe]:
+                where_parts.append("RTRIM(LTRIM(TR.dep)) = %(fdep)s")
+                parameters["fdep"] = fdep_value
+
+        DEPS_ALLOW_TPHOR = {'DPLAN', 'DPROD'}
+        if ftphor_value:
+            if is_rh or is_admin:
+                where_parts.append("RTRIM(LTRIM(TR.tp_hor)) = %(ftp_hor)s")
+                parameters["ftp_hor"] = ftphor_value
+            elif is_chefe:
+                deps_chefe_upper = {d.strip().upper() for d in deps_chefe}
+                if deps_chefe_upper & DEPS_ALLOW_TPHOR:
+                    where_parts.append("RTRIM(LTRIM(TR.tp_hor)) = %(ftp_hor)s")
+                    parameters["ftp_hor"] = ftphor_value
+
         if fdata_value:
             start_date = None
             end_date   = None
 
-            # formato: { formatted: { startValue, endValue } }
             if isinstance(fdata_value, dict) and 'formatted' in fdata_value:
                 formatted = fdata_value.get('formatted') or {}
                 if isinstance(formatted, dict):
                     start_date = formatted.get('startValue')
                     end_date   = formatted.get('endValue')
 
-            # formato: [">=YYYY-MM-DD", "<=YYYY-MM-DD"]
             elif isinstance(fdata_value, list) and len(fdata_value) >= 2:
                 raw_start  = str(fdata_value[0]).replace(">=", "").strip()
                 raw_end    = str(fdata_value[1]).replace("<=", "").strip()
                 start_date = raw_start.split(' ')[0].strip()
                 end_date   = raw_end.split(' ')[0].strip()
 
-            # formato: {">=": "...", "<=": "..."}
             elif isinstance(fdata_value, dict):
                 start_date = fdata_value.get(">=")
                 end_date   = fdata_value.get("<=")
@@ -1239,9 +1222,6 @@ def RegistosRH(request, format=None):
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-        # ══════════════════════════════════════════════════════════
-        # Query principal
-        # ══════════════════════════════════════════════════════════
         dql = dbmssql.dql(request.data, False)
 
         cols = """
@@ -1279,19 +1259,14 @@ def RegistosRH(request, format=None):
 
         if not response_rponto.get('rows'):
             return Response({
-                "rows":     [],
-                "total":    0,
-                "page":     dql.currentPage,
-                "pageSize": dql.pageSize,
-                "status":   "success"
+                "rows": [], "total": 0,
+                "page": dql.currentPage, "pageSize": dql.pageSize,
+                "status": "success"
             })
 
         registos      = response_rponto.get('rows', [])
         total_records = response_rponto.get('total', 0)
 
-        # ══════════════════════════════════════════════════════════
-        # Enriquecer com nome colaborador (SAGE)
-        # ══════════════════════════════════════════════════════════
         nums_list         = list({r.get('num') for r in registos if r.get('num')})
         funcionarios_dict = {}
 
@@ -1309,21 +1284,16 @@ def RegistosRH(request, format=None):
                 data = dict(zip(cols_func, row))
                 funcionarios_dict[data['NFUNC']] = data
 
-        # ══════════════════════════════════════════════════════════
-        # Normalização + cálculo turno
-        # ══════════════════════════════════════════════════════════
         registos_normalizados = []
 
         for registro in registos:
             primeira_picagem_dt = None
 
-            # ty_01..ty_08 — normalizar para lowercase sem espaços
             for i in range(1, 9):
                 ty_key = f"ty_{i:02d}"
                 if registro.get(ty_key):
                     registro[ty_key] = str(registro[ty_key]).strip().lower()
 
-            # ss_01..ss_08 — converter para string normalizada
             for i in range(1, 9):
                 ss_key = f"ss_{i:02d}"
                 val = registro.get(ss_key)
@@ -1341,7 +1311,6 @@ def RegistosRH(request, format=None):
                     if isinstance(dt_obj, (datetime, date)):
                         registro[ss_key] = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
 
-            # Calcular data e tipo de turno
             if primeira_picagem_dt:
                 hora       = primeira_picagem_dt.hour
                 data_turno = (
@@ -1360,19 +1329,16 @@ def RegistosRH(request, format=None):
                 )
                 registro['tipo_turno'] = 'N/A'
 
-            # Nome colaborador
             num = registro.get('num')
             registro['nome_colaborador'] = (
                 funcionarios_dict.get(num, {}).get('NOME', 'Nome não disponível')
             )
 
-            # Normalizar dts para string
             if isinstance(registro.get('dts'), (datetime, date)):
                 registro['dts'] = registro['dts'].strftime('%Y-%m-%d %H:%M:%S')
 
             registos_normalizados.append(registro)
 
-        # Filtro por nome (pós-processamento — só usado quando fnome enviado)
         if fnome_value:
             registos_normalizados = [
                 r for r in registos_normalizados
@@ -1395,6 +1361,42 @@ def RegistosRH(request, format=None):
     finally:
         connection_rponto.close()
         connection_sage.close()
+
+
+def TpHorDistinctList(request, format=None):
+    try:
+        filter_data = request.data.get('filter', {})
+        fdep = (filter_data.get('fdep') or '').strip()
+
+        where_parts = [
+            "tp_hor IS NOT NULL",
+            "RTRIM(LTRIM(tp_hor)) != ''"
+        ]
+        params = []
+
+        if fdep:
+            where_parts.append("RTRIM(LTRIM(dep)) = %s")
+            params.append(fdep)
+
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(f"""
+                SELECT DISTINCT
+                    RTRIM(LTRIM(tp_hor)) AS codigo
+                FROM rponto.dbo.time_registration
+                {where_sql}
+                ORDER BY codigo
+            """, params)
+            rows = [
+                {'codigo': r[0], 'nome': r[0]}
+                for r in cursor.fetchall()
+            ]
+        return Response({"rows": rows, "status": "success"})
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
 
 
 
@@ -8193,3 +8195,486 @@ def FeriasDecidirAlteracao(request, format=None):
         traceback.print_exc()
         return Response({'status': 'error', 'title': str(e)})
 
+
+#region TESTE DE TURNOS
+
+
+def ChefeTurnoList(request, format=None):
+    try:
+        f          = request.data.get('filter', {})
+        dep_codigo = (f.get('dep_codigo') or 'DPROD').strip()
+        equipa     = (f.get('equipa') or '').strip()
+
+        where  = ["ct.dep_codigo = %s"]
+        params = [dep_codigo]
+
+        if equipa:
+            where.append("ct.equipa_letra = %s")
+            params.append(equipa)
+
+        where_sql = " AND ".join(where)
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(f"""
+                SELECT
+                    ct.id,
+                    RTRIM(LTRIM(ct.num_chefe))  AS num_chefe,
+                    RTRIM(LTRIM(ct.equipa_letra))     AS equipa,
+                    RTRIM(LTRIM(ct.dep_codigo)) AS dep_codigo,
+                    CONVERT(VARCHAR(10), ct.dt_inicio, 23) AS dt_inicio,
+                    CONVERT(VARCHAR(10), ct.dt_fim,    23) AS dt_fim,
+                    ct.ativo
+                FROM rponto.dbo.rh_chefes_turno ct
+                WHERE {where_sql}
+                ORDER BY ct.equipa_letra, ct.ativo DESC, ct.dt_inicio DESC
+            """, params)
+            cols = [c[0] for c in cursor.description]
+            rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+        # Enriquecer com nomes do SAGE
+        nums  = list({r['num_chefe'] for r in rows if r.get('num_chefe')})
+        nomes = _get_nomes_colaboradores(nums)
+        for row in rows:
+            row['nome_chefe'] = nomes.get(row['num_chefe'], {}).get('nome', '')
+
+        return Response({"rows": rows, "total": len(rows), "status": "success"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+def ChefeTurnoSave(request, format=None):
+    try:
+        from django.contrib.auth.models import User, Group
+
+        f          = request.data.get('filter', {})
+        num_chefe  = (f.get('num_chefe') or '').strip()
+        equipa     = (f.get('equipa') or '').strip().upper()
+        dep_codigo = (f.get('dep_codigo') or 'DPROD').strip()
+        dt_inicio  = (f.get('dt_inicio') or datetime.now().strftime('%Y-%m-%d')).strip()
+
+        if not num_chefe or not equipa:
+            return Response({
+                "status": "error",
+                "title": "num_chefe e equipa são obrigatórios"
+            })
+
+        # Normalizar num_chefe
+        if not num_chefe.upper().startswith('F'):
+            num_chefe = f"F{num_chefe.zfill(5)}"
+        num_chefe = num_chefe.upper()
+
+        # Validar equipa
+        equipas_validas = ['A', 'B', 'C', 'D', 'E']
+        if equipa not in equipas_validas:
+            return Response({
+                "status": "error",
+                "title": f"Equipa inválida. Use: {', '.join(equipas_validas)}"
+            })
+
+        with connections[connMssqlName].cursor() as cursor:
+            # Verificar se já é chefe desta equipa
+            cursor.execute("""
+                SELECT COUNT(*) FROM rponto.dbo.rh_chefes_turno
+                WHERE num_chefe = %s AND equipa_letra = %s AND ativo = 1
+            """, [num_chefe, equipa])
+            if cursor.fetchone()[0] > 0:
+                return Response({
+                    "status": "error",
+                    "title": f"{num_chefe} já é chefe de turno ativo da equipa {equipa}"
+                })
+
+            # Inserir
+            cursor.execute("""
+                INSERT INTO rponto.dbo.rh_chefes_turno
+                    (num_chefe, equipa_letra, dep_codigo, dt_inicio, ativo, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 1, GETDATE(), GETDATE())
+            """, [num_chefe, equipa, dep_codigo, dt_inicio])
+
+        try:
+            user = User.objects.filter(username__iexact=num_chefe).first()
+            if user:
+                grupo, _ = Group.objects.get_or_create(name='chefeturno')
+                user.groups.add(grupo)
+                print(f"[ChefeTurnoSave] Grupo 'chefeturno' adicionado a {num_chefe}")
+            else:
+                print(f"[ChefeTurnoSave] User Django '{num_chefe}' não encontrado — grupo não atribuído")
+        except Exception as e_grp:
+            print(f"[ChefeTurnoSave] Erro ao atribuir grupo Django: {e_grp}")
+
+        return Response({
+            "status": "success",
+            "title": f"Chefe de turno {num_chefe} atribuído à equipa {equipa}"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+def ChefeTurnoDelete(request, format=None):
+    try:
+        from django.contrib.auth.models import User, Group
+
+        chefe_id = request.data.get('filter', {}).get('id')
+        if not chefe_id:
+            return Response({"status": "error", "title": "id obrigatório"})
+
+        num_chefe = None
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT num_chefe FROM rponto.dbo.rh_chefes_turno WHERE id = %s
+            """, [chefe_id])
+            row = cursor.fetchone()
+            if row:
+                num_chefe = row[0].strip()
+
+            cursor.execute("""
+                UPDATE rponto.dbo.rh_chefes_turno
+                SET ativo = 0, dt_fim = GETDATE(), updated_at = GETDATE()
+                WHERE id = %s
+            """, [chefe_id])
+
+        if num_chefe:
+            with connections[connMssqlName].cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM rponto.dbo.rh_chefes_turno
+                    WHERE num_chefe = %s AND ativo = 1
+                """, [num_chefe])
+                restantes = cursor.fetchone()[0]
+
+            if restantes == 0:
+                try:
+                    user = User.objects.filter(username__iexact=num_chefe).first()
+                    if user:
+                        grupo = Group.objects.filter(name='chefeturno').first()
+                        if grupo:
+                            user.groups.remove(grupo)
+                            print(f"[ChefeTurnoDelete] Grupo 'chefeturno' removido de {num_chefe}")
+                except Exception as e_grp:
+                    print(f"[ChefeTurnoDelete] Erro ao remover grupo Django: {e_grp}")
+
+        return Response({"status": "success", "title": "Chefe de turno removido com sucesso"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+def _get_equipas_chefe_turno(num_chefe):
+    """Devolve lista de equipas que o chefe de turno gere (ativas)."""
+    try:
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT RTRIM(LTRIM(equipa))
+                FROM rponto.dbo.rh_chefes_turno
+                WHERE num_chefe = %s
+                  AND ativo = 1
+                  AND (dt_fim IS NULL OR dt_fim >= GETDATE())
+            """, [num_chefe])
+            return [r[0] for r in cursor.fetchall()]
+    except Exception:
+        return []
+
+
+def ColaboradoresEquipaChefeTurno(request, format=None):
+    """
+    Lista colaboradores das equipas que o chefe de turno gere.
+    Usado no dropdown do formulário de justificação do chefe de turno.
+    filter: { num_chefe }
+    """
+    try:
+        f         = request.data.get('filter', {})
+        num_chefe = (f.get('num_chefe') or '').strip()
+
+        if not num_chefe:
+            return Response({"rows": [], "total": 0, "status": "success"})
+
+        equipas = _get_equipas_chefe_turno(num_chefe)
+        if not equipas:
+            return Response({
+                "rows": [], "total": 0, "status": "success",
+                "warn": "Não tem equipas atribuídas"
+            })
+
+        placeholders = ', '.join(['%s'] * len(equipas))
+
+        with connections[connMssqlName].cursor() as cursor:
+            # Colaboradores DPROD com tp_hor nas equipas do chefe de turno
+            # (últimos 3 meses para incluir colaboradores ativos)
+            cursor.execute(f"""
+                SELECT
+                    sub.num,
+                    sub.tp_hor AS equipa,
+                    sub.dep
+                FROM (
+                    SELECT
+                        RTRIM(LTRIM(TR.num))    AS num,
+                        RTRIM(LTRIM(TR.tp_hor)) AS tp_hor,
+                        RTRIM(LTRIM(TR.dep))    AS dep,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY TR.num
+                            ORDER BY TR.dts DESC
+                        ) AS rn
+                    FROM rponto.dbo.time_registration TR
+                    WHERE RTRIM(LTRIM(TR.tp_hor)) IN ({placeholders})
+                      AND RTRIM(LTRIM(TR.dep)) = 'DPROD'
+                      AND TR.dts >= DATEADD(MONTH, -3, GETDATE())
+                ) sub
+                WHERE sub.rn = 1
+                ORDER BY sub.tp_hor, sub.num
+            """, equipas)
+            cols = [c[0] for c in cursor.description]
+            rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+        # Enriquecer com nomes do SAGE
+        nums  = [r['num'] for r in rows if r.get('num')]
+        nomes = _get_nomes_colaboradores(nums)
+        for row in rows:
+            info = nomes.get(row['num'], {})
+            row['nome'] = info.get('nome', '')
+
+        return Response({"rows": rows, "total": len(rows), "status": "success"})
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+def JustificacaoCreateChefeTurno(request, format=None):
+    """
+    Chefe de turno cria justificação EM NOME do colaborador.
+    O campo num_chefe é preenchido automaticamente com o chefe de turno.
+    filter: {
+        num,             -- colaborador alvo
+        num_chefe_turno, -- quem está a submeter
+        dt_inicio,
+        dt_fim,
+        motivo_codigo,
+        descricao
+    }
+    """
+    try:
+        f = request.data.get('filter', {})
+
+        num              = (f.get('num') or '').strip()
+        num_chefe_turno  = (f.get('num_chefe_turno') or '').strip()
+        dt_inicio        = (f.get('dt_inicio') or '').strip()
+        dt_fim           = (f.get('dt_fim') or '').strip()
+        motivo_codigo    = (f.get('motivo_codigo') or '').strip()
+        descricao        = (f.get('descricao') or '').strip()
+
+        if not all([num, num_chefe_turno, dt_inicio, dt_fim, motivo_codigo]):
+            return Response({
+                "status": "error",
+                "title": "Campos obrigatórios: num, num_chefe_turno, dt_inicio, dt_fim, motivo_codigo"
+            })
+
+        # Validar que o chefe de turno realmente gere a equipa deste colaborador
+        equipas_chefe = _get_equipas_chefe_turno(num_chefe_turno)
+        if not equipas_chefe:
+            return Response({
+                "status": "error",
+                "title": "Não é chefe de turno ativo de nenhuma equipa"
+            })
+
+        # Obter equipa e dep do colaborador
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                SELECT TOP 1
+                    RTRIM(LTRIM(tp_hor)) AS tp_hor,
+                    RTRIM(LTRIM(dep))    AS dep
+                FROM rponto.dbo.time_registration
+                WHERE num = %s
+                  AND tp_hor IS NOT NULL AND tp_hor != ''
+                  AND dep    IS NOT NULL AND dep    != ''
+                ORDER BY dts DESC
+            """, [num])
+            row = cursor.fetchone()
+
+        if not row:
+            return Response({
+                "status": "error",
+                "title": f"Colaborador {num} não encontrado na time_registration"
+            })
+
+        tp_hor_colab = row[0]
+        dep_colab    = row[1]
+
+        if tp_hor_colab not in equipas_chefe:
+            return Response({
+                "status": "error",
+                "title": f"Não tem permissão para gerir a equipa {tp_hor_colab} do colaborador {num}"
+            })
+
+        # Inserir justificação — status_chefe já aprovado (1), status global = 1 (aguarda RH/chefe dep)
+        # O chefe de turno ao introduzir já está a validar, logo passa para o chefe de departamento
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO rponto.dbo.justificacoes
+                    (num, dep_codigo, tp_hor, dt_inicio, dt_fim,
+                     motivo_codigo, descricao, dt_submissao,
+                     status_chefe, dt_chefe, num_chefe,
+                     status_rh, status)
+                OUTPUT INSERTED.id
+                VALUES (%s, %s, %s, %s, %s,
+                        %s, %s, GETDATE(),
+                        0, NULL, %s,
+                        0, 0)
+            """, [
+                num, dep_colab, tp_hor_colab, dt_inicio, dt_fim,
+                motivo_codigo, descricao,
+                num_chefe_turno
+            ])
+            row = cursor.fetchone()
+            new_id = row[0] if row else None
+
+        return Response({
+            "status": "success",
+            "title": f"Justificação criada para {num} com sucesso! (ID #{new_id})",
+            "id": new_id
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
+
+
+def JustificacoesListChefeTurno(request, format=None):
+    """
+    Lista justificações dos colaboradores das equipas do chefe de turno.
+    filter: { num_chefe_turno, fnum, fstatus, fdata }
+    """
+    try:
+        f               = request.data.get('filter', {})
+        num_chefe_turno = (f.get('num_chefe_turno') or '').strip()
+        fnum            = (f.get('fnum') or '').strip()
+        fstatus         = f.get('fstatus')
+        fdata           = f.get('fdata')
+
+        if not num_chefe_turno:
+            return Response({"rows": [], "total": 0, "status": "success"})
+
+        equipas = _get_equipas_chefe_turno(num_chefe_turno)
+        if not equipas:
+            return Response({
+                "rows": [], "total": 0, "status": "success",
+                "warn": "Sem equipas atribuídas"
+            })
+
+        where  = ["1=1"]
+        params = []
+
+        # Filtrar por equipas do chefe de turno
+        placeholders = ', '.join(['%s'] * len(equipas))
+        where.append(f"RTRIM(LTRIM(J.tp_hor)) IN ({placeholders})")
+        params.extend(equipas)
+
+        # Só DPROD
+        where.append("RTRIM(LTRIM(J.dep_codigo)) = 'DPROD'")
+
+        if fnum:
+            clean = fnum.replace('%', '').strip()
+            where.append("J.num LIKE %s")
+            params.append(f"%{clean}%")
+
+        if fstatus is not None and fstatus != '':
+            where.append("J.status = %s")
+            params.append(int(fstatus))
+
+        if isinstance(fdata, list) and len(fdata) == 2:
+            start = str(fdata[0]).replace(">=", "").strip()[:10]
+            end   = str(fdata[1]).replace("<=", "").strip()[:10]
+            where.append("CAST(J.dt_submissao AS DATE) >= %s")
+            where.append("CAST(J.dt_submissao AS DATE) <= %s")
+            params.extend([start, end])
+
+        where_clause = " AND ".join(where)
+
+        dql       = dbmssql.dql(request.data, False)
+        page      = dql.currentPage if hasattr(dql, 'currentPage') else 1
+        page_size = dql.pageSize    if hasattr(dql, 'pageSize')    else 20
+        offset    = (page - 1) * page_size
+
+        with connections[connMssqlName].cursor() as cursor:
+            cursor.execute(f"""
+                SELECT COUNT(*)
+                FROM rponto.dbo.justificacoes J
+                WHERE {where_clause}
+            """, params)
+            total = cursor.fetchone()[0]
+
+            cursor.execute(f"""
+                SELECT
+                    J.id,
+                    J.num,
+                    J.dep_codigo,
+                    J.tp_hor,
+                    CONVERT(VARCHAR, J.dt_inicio,    23)  AS dt_inicio,
+                    CONVERT(VARCHAR, J.dt_fim,       23)  AS dt_fim,
+                    J.motivo_codigo,
+                    M.descricao                            AS motivo_descricao,
+                    J.descricao,
+                    J.pdf_filename,
+                    J.pdf_size,
+                    CONVERT(VARCHAR, J.dt_submissao, 120) AS dt_submissao,
+                    J.status_chefe,
+                    CONVERT(VARCHAR, J.dt_chefe,     120) AS dt_chefe,
+                    J.num_chefe,
+                    J.obs_chefe,
+                    J.status_rh,
+                    CONVERT(VARCHAR, J.dt_rh,        120) AS dt_rh,
+                    J.num_rh,
+                    J.obs_rh,
+                    J.status,
+                    CASE J.status
+                        WHEN 0 THEN 'Pendente (Chefe Dep.)'
+                        WHEN 1 THEN 'Aguarda RH'
+                        WHEN 2 THEN 'Aprovado'
+                        WHEN 3 THEN 'Rejeitado pelo Chefe'
+                        WHEN 4 THEN 'Rejeitado pelo RH'
+                        ELSE        'Desconhecido'
+                    END AS status_label
+                FROM rponto.dbo.justificacoes J
+                LEFT JOIN rponto.dbo.justificacoes_motivos M
+                    ON J.motivo_codigo = M.codigo
+                WHERE {where_clause}
+                ORDER BY J.dt_submissao DESC
+                OFFSET %s ROWS FETCH NEXT %s ROWS ONLY
+            """, params + [offset, page_size])
+
+            columns = [col[0] for col in cursor.description]
+            rows    = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        # Enriquecer com nomes
+        nums_unicos = list({r['num'] for r in rows if r.get('num')})
+        nomes_dict  = {}
+        if nums_unicos:
+            try:
+                with connections[connSage100cName].cursor() as cursor_sage:
+                    ph = ', '.join(['%s'] * len(nums_unicos))
+                    cursor_sage.execute(f"""
+                        SELECT NFUNC, NOME
+                        FROM TRIMTEK_1GEP.dbo.FUNC1
+                        WHERE NFUNC IN ({ph})
+                    """, nums_unicos)
+                    for r in cursor_sage.fetchall():
+                        nomes_dict[r[0]] = r[1]
+            except Exception as e:
+                print(f"[WARN] Nomes SAGE: {e}")
+
+        for row in rows:
+            row['nome_colaborador'] = nomes_dict.get(row['num'], '')
+
+        return Response({
+            "rows":     rows,
+            "total":    total,
+            "page":     page,
+            "pageSize": page_size,
+            "status":   "success"
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"status": "error", "title": str(e)})
