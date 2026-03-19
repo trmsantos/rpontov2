@@ -39,7 +39,6 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
             await axios.post('/api/password-reset/request/', {
                 email: email.trim()
             });
-            // Resposta é sempre "success" por segurança
             setSent(true);
         } catch (e) {
             setError(e.response?.data?.title || 'Erro ao processar pedido.');
@@ -59,7 +58,6 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
             width={460}
         >
             <div style={{ padding: '16px 0' }}>
-                {/* Header */}
                 <div style={{ textAlign: 'center', marginBottom: 24 }}>
                     <div style={{
                         width: 56, height: 56, borderRadius: 16,
@@ -90,7 +88,6 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
                     />
                 )}
 
-                {/* ── Formulário de email ── */}
                 {!sent && (
                     <div>
                         <Text type="secondary" style={{ display: 'block', marginBottom: 16, fontSize: 13 }}>
@@ -133,7 +130,6 @@ const ModalRecuperarPassword = ({ visible, onClose }) => {
                     </div>
                 )}
 
-                {/* ── Confirmação de envio ── */}
                 {sent && (
                     <div style={{ textAlign: 'center' }}>
                         <Alert
@@ -203,21 +199,23 @@ export default () => {
 
             const decodedToken = jwt_decode(response.data.access);
             const _auth = {
-                access_token:  response.data.access,
-                refresh_token: response.data.refresh,
-                username:      values.username.trim().toUpperCase(),
-                first_name:    decodedToken.first_name,
-                last_name:     decodedToken.last_name,
-                num:           decodedToken.num,
-                email:         decodedToken.email,
-                groups:        decodedToken.groups,
-                isAdmin:       decodedToken.isAdmin,
-                isRH:          decodedToken.isRH,
-                isChefe:       decodedToken.isChefe    || false,
-                deps_chefe:    decodedToken.deps_chefe || [],
-                dep:           decodedToken.dep        || '',
-                tp_hor:        decodedToken.tp_hor     || '',
-                items:         decodedToken.items
+                access_token:        response.data.access,
+                refresh_token:       response.data.refresh,
+                username:            values.username.trim().toUpperCase(),
+                first_name:          decodedToken.first_name,
+                last_name:           decodedToken.last_name,
+                num:                 decodedToken.num,
+                email:               decodedToken.email,
+                groups:              decodedToken.groups,
+                isAdmin:             decodedToken.isAdmin,
+                isRH:                decodedToken.isRH,
+                isChefe:             decodedToken.isChefe             || false,
+                isChefeTurno:        decodedToken.isChefeTurno        || false,
+                deps_chefe:          decodedToken.deps_chefe          || [],
+                equipas_chefeturno:  decodedToken.equipas_chefeturno  || [],
+                dep:                 decodedToken.dep                 || '',
+                tp_hor:              decodedToken.tp_hor              || '',
+                items:               decodedToken.items
             };
 
             localStorage.setItem('auth', JSON.stringify(_auth));

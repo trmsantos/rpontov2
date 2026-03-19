@@ -61,6 +61,31 @@ const fetch = async ({ url = "", responseType = "json", method = "get", filter =
 }
 export default fetch;
 
+
+export async function fetchFormData(url, formData) {
+    const csrfToken = getCookie('csrftoken');
+
+    const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',         
+        headers: {
+            'X-CSRFToken': csrfToken,    
+        },
+        body: formData,
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return response.json();
+}
+
+function getCookie(name) {
+    const match = document.cookie.match(new RegExp('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)'));
+    return match ? decodeURIComponent(match[2]) : '';
+}
+
 export const fetchReducers = (builder, thunk) => {
   builder.addCase(thunk.pending, (state, action) => {
     state.loading = true;

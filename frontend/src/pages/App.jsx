@@ -37,6 +37,23 @@ export const MediaContext = React.createContext({});
 export const SocketContext = React.createContext({});
 export const AppContext    = React.createContext({});
 
+/* ── Helper: descodificar payload do JWT ── */
+const decodeJwtPayload = (token) => {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+            atob(base64).split('').map(c =>
+                '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+            ).join('')
+        );
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+        console.warn('[decodeJwtPayload] Erro:', e);
+        return {};
+    }
+};
+
 /* ── Guarda de rota pública: redireciona utilizadores autenticados ── */
 const PublicRoute = ({ children }) => {
     const { auth, authLoading } = useContext(AppContext);
@@ -71,24 +88,6 @@ const ProtectedDPROD = ({ children }) => {
         : <Navigate to="/app/rh/ferias" replace />;
 };
 
-/* ── Guarda de rota: só Chefe de Turno ── */
-const ProtectedChefeTurno = ({ children }) => {
-    const { auth, authLoading } = useContext(AppContext);
-    if (authLoading) return <Spin />;
-    return auth?.isChefeTurno
-        ? children
-        : <Navigate to="/app/rh/ferias" replace />;
-};
-
-/* ── Guarda de rota: só RH ou Chefe de Departamento ── */
-const ProtectedRHouChefe = ({ children }) => {
-    const { auth, authLoading } = useContext(AppContext);
-    if (authLoading) return <Spin />;
-    return (auth?.isRH || auth?.isChefe)
-        ? children
-        : <Navigate to="/app/rh/ferias" replace />;
-};
-
 /* ── Rotas ────────────────────────────────────────── */
 const RenderRouter = () => {
     const element = useRoutes([
@@ -117,7 +116,6 @@ const RenderRouter = () => {
                 </PrivateRoute>
             ),
             children: [
-                /* Redirect default: /app → /app/rh/ferias */
                 { index: true, element: <Navigate to="/app/rh/ferias" replace /> },
 
                 /* ── RH ── */
@@ -129,14 +127,12 @@ const RenderRouter = () => {
                   element: <Suspense fallback={<Spin />}><PlanRH key="lst-pl-rh" /></Suspense> },
                 { path: "rh/departamentos",
                   element: <Suspense fallback={<Spin />}><GestaoDepart /></Suspense> },
+                { path: "rh/gestao-chefes-turno",
+                  element: <Suspense fallback={<Spin />}><GestaoChefesTurno /></Suspense> },
                 { path: "rh/processamento",
                   element: <Suspense fallback={<Spin />}><ProcessamentoSalarial /></Suspense> },
                 { path: "rh/justificacoes/rh",
                   element: <Suspense fallback={<Spin />}><JustificacoesRH /></Suspense> },
-
-                /* ── Gestão Chefes de Turno (RH + Chefe DPROD) ── */
-                { path: "rh/gestao-chefes-turno",
-                  element: <Suspense fallback={<Spin />}><GestaoChefesTurno /></Suspense> },
 
                 /* ── Área Pessoal ── */
                 { path: "rh/registospessoal",
@@ -152,6 +148,10 @@ const RenderRouter = () => {
                 { path: "rh/justificacoes/pessoal",
                   element: <Suspense fallback={<Spin />}><JustificacoesPessoal /></Suspense> },
 
+                /* ── Chefe de Turno ── */
+                { path: "rh/justificacoes/chefeturno",
+                  element: <Suspense fallback={<Spin />}><JustificacoesChefeTurno /></Suspense> },
+
                 /* ── RH + Chefe ── */
                 { path: "rh/gestao-ferias",
                   element: <Suspense fallback={<Spin />}><GestaoFerias /></Suspense> },
@@ -161,17 +161,6 @@ const RenderRouter = () => {
                   element: <Suspense fallback={<Spin />}><RegistosRHChefe key="picagens-dep" /></Suspense> },
                 { path: "rh/colaboradores-departamento",
                   element: <Suspense fallback={<Spin />}><ColaboradoresDepartamento /></Suspense> },
-
-                /* ── Chefe de Turno — Justificações da equipa ── */
-                { path: "rh/justificacoes/chefeturno",
-                  element: (
-                      <ProtectedChefeTurno>
-                          <Suspense fallback={<Spin />}>
-                              <JustificacoesChefeTurno />
-                          </Suspense>
-                      </ProtectedChefeTurno>
-                  )
-                },
 
                 /* ── DPROD — Trocas de Turno ── */
                 { path: "rh/trocas-turno",
@@ -215,21 +204,34 @@ const App = () => {
         if (_auth?.access_token) {
             axios.defaults.headers.common.Authorization = `Bearer ${_auth.access_token}`;
 
+            // ── Descodificar o JWT para garantir que temos TODOS os claims ──
+            const jwtPayload = decodeJwtPayload(_auth.access_token);
+
             const authNormalizado = {
                 isAuthenticated: true,
                 ..._auth,
-                dep:                _auth.dep                || '',
-                tp_hor:             _auth.tp_hor             || '',
-                isChefe:            _auth.isChefe            || false,
-                isChefeTurno:       _auth.isChefeTurno       || false,
-                deps_chefe:         _auth.deps_chefe         || [],
-                equipas_chefeturno: _auth.equipas_chefeturno || [],
+                // Campos que vêm do localStorage (guardados pelo Login)
+                // MAS fazemos fallback para o JWT payload caso o Login não os tenha guardado
+                num:                  _auth.num                  || jwtPayload.num                  || '',
+                first_name:           _auth.first_name           || jwtPayload.first_name           || '',
+                last_name:            _auth.last_name            || jwtPayload.last_name            || '',
+                email:                _auth.email                || jwtPayload.email                || '',
+                dep:                  _auth.dep                  || jwtPayload.dep                  || '',
+                tp_hor:               _auth.tp_hor               || jwtPayload.tp_hor               || '',
+                isAdmin:              _auth.isAdmin              ?? jwtPayload.isAdmin              ?? false,
+                isRH:                 _auth.isRH                 ?? jwtPayload.isRH                 ?? false,
+                isChefe:              _auth.isChefe              ?? jwtPayload.isChefe              ?? false,
+                isChefeTurno:         _auth.isChefeTurno         ?? jwtPayload.isChefeTurno         ?? false,
+                deps_chefe:           _auth.deps_chefe           || jwtPayload.deps_chefe           || [],
+                equipas_chefeturno:   _auth.equipas_chefeturno   || jwtPayload.equipas_chefeturno   || [],
+                groups:               _auth.groups               || jwtPayload.groups               || [],
+                items:                _auth.items                || jwtPayload.items                || {},
             };
 
             setAuth(authNormalizado);
-            if (process.env.NODE_ENV === 'development') {
-                console.log('[App] auth normalizado:', authNormalizado);
-            }
+            console.log('[App] auth normalizado:', authNormalizado);
+            console.log('[App] isChefeTurno:', authNormalizado.isChefeTurno);
+            console.log('[App] equipas_chefeturno:', authNormalizado.equipas_chefeturno);
         }
         setAuthLoading(false);
     }, []);

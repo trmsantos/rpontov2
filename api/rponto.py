@@ -14,6 +14,7 @@ from django.http.response import HttpResponse
 from django.http import FileResponse
 from django.contrib.auth.mixins import LoginRequiredMixin
 from rest_framework import status
+from rest_framework.parsers import MultiPartParser, FormParser
 import mimetypes
 import pytz
 from datetime import datetime, timedelta, date, time as dt_time
@@ -26,7 +27,7 @@ import random
 
 from pyodbc import Cursor, Error, connect, lowercase
 from django.http.response import JsonResponse
-from rest_framework.decorators import api_view, authentication_classes, permission_classes, renderer_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, renderer_classes, parser_classes
 from django.db import connections, transaction
 from support.database import encloseColumn, Filters, DBSql, TypeDml, fetchall, Check
 from support.myUtils import  ifNull
@@ -4174,7 +4175,8 @@ def JustificacaoPendentesCount(request, format=None):
 
 @api_view(['POST'])
 @renderer_classes([JSONRenderer])
-@permission_classes([IsAuthenticated])
+#@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
 def UploadJustificacaoPDF(request):
     try:
         justificacao_id = request.data.get('id')
@@ -4253,7 +4255,7 @@ def UploadJustificacaoPDF(request):
 # ENDPOINT DEDICADO: Download/Visualização de PDF
 @api_view(['GET'])
 @authentication_classes([QueryParamJWTAuthentication])
-@permission_classes([IsAuthenticated])
+#@permission_classes([IsAuthenticated])
 def DownloadJustificacaoPDF(request, justificacao_id):
     try:
         with connections[connMssqlName].cursor() as cursor:
@@ -8363,30 +8365,31 @@ def ChefeTurnoDelete(request, format=None):
 
 
 def _get_equipas_chefe_turno(num_chefe):
-    """Devolve lista de equipas que o chefe de turno gere (ativas)."""
     try:
         with connections[connMssqlName].cursor() as cursor:
             cursor.execute("""
-                SELECT RTRIM(LTRIM(equipa))
+                SELECT RTRIM(LTRIM(equipa_letra))
                 FROM rponto.dbo.rh_chefes_turno
                 WHERE num_chefe = %s
                   AND ativo = 1
                   AND (dt_fim IS NULL OR dt_fim >= GETDATE())
+                ORDER BY equipa_letra
             """, [num_chefe])
-            return [r[0] for r in cursor.fetchall()]
-    except Exception:
+            return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"[ERROR] _get_equipas_chefe_turno({num_chefe}): {e}")
         return []
 
 
 def ColaboradoresEquipaChefeTurno(request, format=None):
-    """
-    Lista colaboradores das equipas que o chefe de turno gere.
-    Usado no dropdown do formulário de justificação do chefe de turno.
-    filter: { num_chefe }
-    """
     try:
         f         = request.data.get('filter', {})
-        num_chefe = (f.get('num_chefe') or '').strip()
+        # Accept both key names for backwards compatibility
+        num_chefe = (
+            f.get('num_chefe_turno')   # new frontend key (correct)
+            or f.get('num_chefe')      # old key (fallback)
+            or ''
+        ).strip()
 
         if not num_chefe:
             return Response({"rows": [], "total": 0, "status": "success"})
@@ -8401,8 +8404,6 @@ def ColaboradoresEquipaChefeTurno(request, format=None):
         placeholders = ', '.join(['%s'] * len(equipas))
 
         with connections[connMssqlName].cursor() as cursor:
-            # Colaboradores DPROD com tp_hor nas equipas do chefe de turno
-            # (últimos 3 meses para incluir colaboradores ativos)
             cursor.execute(f"""
                 SELECT
                     sub.num,
@@ -8428,14 +8429,51 @@ def ColaboradoresEquipaChefeTurno(request, format=None):
             cols = [c[0] for c in cursor.description]
             rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
 
-        # Enriquecer com nomes do SAGE
-        nums  = [r['num'] for r in rows if r.get('num')]
-        nomes = _get_nomes_colaboradores(nums)
-        for row in rows:
-            info = nomes.get(row['num'], {})
-            row['nome'] = info.get('nome', '')
+        if not rows:
+            return Response({"rows": [], "total": 0, "status": "success"})
 
-        return Response({"rows": rows, "total": len(rows), "status": "success"})
+        nums = [r['num'] for r in rows if r.get('num')]
+        if not nums:
+            return Response({"rows": [], "total": 0, "status": "success"})
+
+        ativos_sage = set()
+        nomes_sage  = {}
+        try:
+            with connections[connSage100cName].cursor() as cursor_sage:
+                placeholders_sage = ','.join(['%s'] * len(nums))
+                cursor_sage.execute(f"""
+                    SELECT
+                        RTRIM(LTRIM(NFUNC)) AS NFUNC,
+                        RTRIM(LTRIM(NOME))  AS NOME
+                    FROM TRIMTEK_1GEP.dbo.FUNC1
+                    WHERE NFUNC IN ({placeholders_sage})
+                      AND DEMITIDO = 0
+                """, nums)
+                for row_sage in cursor_sage.fetchall():
+                    nfunc = row_sage[0]
+                    nome  = row_sage[1]
+                    ativos_sage.add(nfunc)
+                    nomes_sage[nfunc] = nome
+        except Exception as e:
+            print(f"[ERROR] ColaboradoresEquipaChefeTurno — SAGE lookup: {e}")
+            nomes_fallback = _get_nomes_colaboradores(nums)
+            for row in rows:
+                info = nomes_fallback.get(row['num'], {})
+                row['nome'] = info.get('nome', '')
+            return Response({"rows": rows, "total": len(rows), "status": "success"})
+
+        rows_filtrados = []
+        for row in rows:
+            num = row['num']
+            if num in ativos_sage:
+                row['nome'] = nomes_sage.get(num, '')
+                rows_filtrados.append(row)
+
+        return Response({
+            "rows":   rows_filtrados,
+            "total":  len(rows_filtrados),
+            "status": "success"
+        })
 
     except Exception as e:
         traceback.print_exc()
@@ -8443,18 +8481,6 @@ def ColaboradoresEquipaChefeTurno(request, format=None):
 
 
 def JustificacaoCreateChefeTurno(request, format=None):
-    """
-    Chefe de turno cria justificação EM NOME do colaborador.
-    O campo num_chefe é preenchido automaticamente com o chefe de turno.
-    filter: {
-        num,             -- colaborador alvo
-        num_chefe_turno, -- quem está a submeter
-        dt_inicio,
-        dt_fim,
-        motivo_codigo,
-        descricao
-    }
-    """
     try:
         f = request.data.get('filter', {})
 
@@ -8508,24 +8534,23 @@ def JustificacaoCreateChefeTurno(request, format=None):
                 "title": f"Não tem permissão para gerir a equipa {tp_hor_colab} do colaborador {num}"
             })
 
-        # Inserir justificação — status_chefe já aprovado (1), status global = 1 (aguarda RH/chefe dep)
-        # O chefe de turno ao introduzir já está a validar, logo passa para o chefe de departamento
         with connections[connMssqlName].cursor() as cursor:
             cursor.execute("""
                 INSERT INTO rponto.dbo.justificacoes
                     (num, dep_codigo, tp_hor, dt_inicio, dt_fim,
-                     motivo_codigo, descricao, dt_submissao,
-                     status_chefe, dt_chefe, num_chefe,
-                     status_rh, status)
+                    motivo_codigo, descricao, dt_submissao,
+                    status_rh, status,
+                    submetido_por, equipa)
                 OUTPUT INSERTED.id
                 VALUES (%s, %s, %s, %s, %s,
                         %s, %s, GETDATE(),
-                        0, NULL, %s,
-                        0, 0)
+                        0, 0,
+                        %s, %s)
             """, [
                 num, dep_colab, tp_hor_colab, dt_inicio, dt_fim,
                 motivo_codigo, descricao,
-                num_chefe_turno
+                num_chefe_turno,   
+                tp_hor_colab       
             ])
             row = cursor.fetchone()
             new_id = row[0] if row else None

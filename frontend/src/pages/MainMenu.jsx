@@ -139,14 +139,12 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
 
     const isActive         = (path) => location.pathname === path;
     const userIsRH         = isRH(auth);
-    const userIsChefe      = auth?.isChefe;
-    const userIsChefeTurno = auth?.isChefeTurno;
+    const userIsChefe      = auth?.isChefe === true;
+    const userIsChefeTurno = auth?.isChefeTurno === true;
 
-    // Trocas de turno: APENAS chefe do departamento DPROD
     const temAcessoTrocas = userIsChefe &&
         (auth?.deps_chefe || []).map(d => String(d).trim()).includes('DPROD');
 
-    // Papel para o badge do footer
     const getRoleLabel = () => {
         if (userIsRH) return 'Recursos Humanos';
         if (userIsChefe) return 'Chefe de Depart.';
@@ -154,7 +152,6 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
         return 'Colaborador';
     };
 
-    // Cor do avatar
     const getAvatarGradient = () => {
         if (userIsRH) return 'from-purple-500 to-purple-700';
         if (userIsChefe) return 'from-amber-500 to-orange-600';
@@ -230,7 +227,6 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                             isOpen={openSections.rh}
                             onToggle={() => toggleSection('rh')}
                         >
-                            {/* === OPÇÕES EXCLUSIVAS RH === */}
                             {userIsRH && (
                                 <>
                                     <MenuItem
@@ -299,7 +295,6 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                                 </>
                             )}
 
-                            {/* === OPÇÕES PARA CHEFES DE DEPARTAMENTO (não-RH) === */}
                             {!userIsRH && userIsChefe && (
                                 <>
                                     <MenuItem
@@ -330,7 +325,6 @@ export default ({ onToggleDrawer, handleLogout, auth }) => {
                                     >
                                         Colaboradores do Dep.
                                     </MenuItem>
-                                    {/* Gestão de Chefes de Turno — só chefes DPROD */}
                                     {(auth?.deps_chefe || []).includes('DPROD') && (
                                         <MenuItem
                                             onClick={() => handleNavigation('/app/rh/gestao-chefes-turno')}

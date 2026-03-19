@@ -136,12 +136,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     try:
                         with connections[connMssqlName].cursor() as cur:
                             cur.execute("""
-                                SELECT RTRIM(LTRIM(equipa))
+                                SELECT RTRIM(LTRIM(equipa_letra))
                                 FROM rponto.dbo.rh_chefes_turno
                                 WHERE num_chefe = %s
                                   AND ativo = 1
                                   AND (dt_fim IS NULL OR dt_fim >= GETDATE())
-                                ORDER BY equipa
+                                ORDER BY equipa_letra
                             """, [num])
                             equipas_chefeturno = [row[0] for row in cur.fetchall()]
 
@@ -232,6 +232,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['equipas_chefeturno']  = equipas_chefeturno
         token['dep']                 = dep
         token['tp_hor']              = tp_hor
+
+        print(f"[AUTH FINAL] {num} → isChefeTurno={isChefeTurno}, equipas={equipas_chefeturno}")
 
         return token
 

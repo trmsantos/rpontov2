@@ -12,21 +12,23 @@ import dayjs from 'dayjs';
 export const LayoutContext = React.createContext({});
 
 const ROUTE_LABELS = {
-    '/app/rh/turnos':                     { label: 'Plano de Horário',               icon: '📅' },
-    '/app/rh/ferias':                     { label: 'Pedido de Férias',               icon: '🌴' },
-    '/app/rh/justificacoes/pessoal':      { label: 'Justificações',                  icon: '📝' },
-    '/app/rh/trocas-turno':               { label: 'Trocas de Turno',                icon: '🔄' },
-    '/app/rh/registos':                   { label: 'Registo de Picagens',            icon: '🕐' },
-    '/app/rh/registosv3':                 { label: 'Picagens V3',                    icon: '🕐' },
-    '/app/rh/plan':                       { label: 'Plano de Horários',              icon: '📋' },
-    '/app/rh/departamentos':              { label: 'Departamentos e Chefes',         icon: '🏢' },
-    '/app/rh/processamento':              { label: 'Processamento Salarial',         icon: '💰' },
-    '/app/rh/gestao-ferias':              { label: 'Gestão de Férias',               icon: '🌴' },
-    '/app/rh/justificacoes/chefe':        { label: 'Justificações do Departamento',  icon: '📝' },
-    '/app/rh/justificacoes/rh':           { label: 'Justificações (RH)',             icon: '📝' },
-    '/app/rh/registos-chefe':             { label: 'Picagens do Departamento',       icon: '🕐' },
-    '/app/rh/colaboradores-departamento': { label: 'Colaboradores',                  icon: '👥' },
-    '/app/rh/registos-pessoal':           { label: 'As Minhas Picagens',             icon: '🕐' },
+    '/app/rh/turnos':                     { label: 'Plano de Horário'},
+    '/app/rh/ferias':                     { label: 'Pedido de Férias' },
+    '/app/rh/justificacoes/pessoal':      { label: 'Justificações' },
+    '/app/rh/trocas-turno':               { label: 'Trocas de Turno'},
+    '/app/rh/registos':                   { label: 'Registo de Picagens' },
+    '/app/rh/registosv3':                 { label: 'Picagens V3'},
+    '/app/rh/plan':                       { label: 'Plano de Horários' },
+    '/app/rh/departamentos':              { label: 'Departamentos e Chefes' },
+    '/app/rh/processamento':              { label: 'Processamento Salarial' },
+    '/app/rh/gestao-ferias':              { label: 'Gestão de Férias' },
+    '/app/rh/justificacoes/chefe':        { label: 'Justificações do Departamento' },
+    '/app/rh/justificacoes/rh':           { label: 'Justificações (RH)'},
+    '/app/rh/justificacoes/chefeturno':   { label: 'Justificações (Chefe Turno)' },
+    '/app/rh/registos-chefe':             { label: 'Picagens do Departamento' },
+    '/app/rh/colaboradores-departamento': { label: 'Colaboradores' },
+    '/app/rh/registos-pessoal':           { label: 'As Minhas Picagens' },
+    '/app/rh/gestao-chefes-turno':        { label: 'Gestão Chefes de Turno' },
 };
 
 
@@ -40,7 +42,6 @@ const NotifIcon = ({ tipo }) => {
 
 const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRefresh }) => (
     <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
             <div className="flex items-center gap-2">
                 <Bell size={14} className="text-slate-600" />
@@ -60,7 +61,6 @@ const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRe
             </button>
         </div>
 
-        {/* Lista */}
         <div className="max-h-72 overflow-y-auto">
             {loading && notificacoes.length === 0 ? (
                 <div className="flex items-center justify-center py-8 text-slate-400">
@@ -94,7 +94,6 @@ const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRe
                                 {n.data ? dayjs(n.data).format('DD/MM/YYYY HH:mm') : ''}
                             </p>
                         </div>
-                        {/* Ponto de não lida */}
                         {!n.lida && (
                             <span className="shrink-0 w-2 h-2 rounded-full bg-indigo-500 mt-1" />
                         )}
@@ -103,14 +102,13 @@ const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRe
             )}
         </div>
 
-        {/* Footer */}
         {notificacoes.length > 0 && (
             <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
                 <button
                     onClick={() => { onNavigate('/app/rh/trocas-turno'); onClose(); }}
                     className="w-full text-center text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
                 >
-                    Ver todas as trocas 
+                    Ver todas as trocas
                 </button>
             </div>
         )}
@@ -118,7 +116,7 @@ const NotificacoesDropdown = ({ notificacoes, loading, onClose, onNavigate, onRe
 );
 
 
-const POLL_INTERVAL_MS = 30_000; 
+const POLL_INTERVAL_MS = 30_000;
 
 function useNotificacoes(auth) {
     const [count,          setCount]          = useState(0);
@@ -147,7 +145,6 @@ function useNotificacoes(auth) {
                 setNotificacoes(res?.rows || []);
                 setCount((res?.rows || []).length);
             } else {
-                // Polling silencioso — só a contagem
                 const res = await fetchPost({
                     url:             `${API_URL}/rponto/sqlp/`,
                     withCredentials: true,
@@ -163,11 +160,10 @@ function useNotificacoes(auth) {
         }
     }, [auth]);
 
-    // Polling a cada 30s (só contagem)
     useEffect(() => {
         if (!auth?.num) return;
 
-        fetchNotifs(false); // primeira chamada ao montar
+        fetchNotifs(false);
 
         timerRef.current = setInterval(() => {
             fetchNotifs(false);
@@ -176,7 +172,6 @@ function useNotificacoes(auth) {
         return () => clearInterval(timerRef.current);
     }, [auth, fetchNotifs]);
 
-    // Carregar detalhe quando o dropdown abre
     const loadDetails = useCallback(() => {
         fetchNotifs(true);
     }, [fetchNotifs]);
@@ -197,7 +192,6 @@ export default () => {
 
     const { count, notificacoes, loading, loadDetails, refresh } = useNotificacoes(auth);
 
-    // Fechar dropdown ao clicar fora
     useEffect(() => {
         const handler = (e) => {
             if (notifRef.current && !notifRef.current.contains(e.target)) {
@@ -211,7 +205,7 @@ export default () => {
     const handleBellClick = () => {
         const next = !showNotifDropdown;
         setShowNotifDropdown(next);
-        if (next) loadDetails(); // carrega detalhes ao abrir
+        if (next) loadDetails();
     };
 
     const openNotification = (status, placement, message, description) => {
@@ -228,10 +222,26 @@ export default () => {
         else                           api.info(config);
     };
 
-    const userIsRH    = isRH(auth);
-    const userIsChefe = auth?.isChefe;
-    const papel       = userIsRH ? 'Recursos Humanos' : userIsChefe ? 'Chefe de Departamento' : 'Colaborador';
-    const papelColor  = userIsRH ? 'from-purple-500 to-purple-700' : userIsChefe ? 'from-amber-500 to-orange-600' : 'from-blue-500 to-blue-700';
+    const userIsRH         = isRH(auth);
+    const userIsChefe      = auth?.isChefe === true;
+    const userIsChefeTurno = auth?.isChefeTurno === true;
+
+    // ✅ CORRIGIDO: incluir isChefeTurno na determinação do papel
+    const papel = userIsRH
+        ? 'Recursos Humanos'
+        : userIsChefe
+            ? 'Chefe de Departamento'
+            : userIsChefeTurno
+                ? 'Chefe de Turno'
+                : 'Colaborador';
+
+    const papelColor = userIsRH
+        ? 'from-purple-500 to-purple-700'
+        : userIsChefe
+            ? 'from-amber-500 to-orange-600'
+            : userIsChefeTurno
+                ? 'from-teal-500 to-emerald-600'
+                : 'from-blue-500 to-blue-700';
 
     const currentRoute = ROUTE_LABELS[location.pathname];
 
@@ -297,7 +307,6 @@ export default () => {
                                 <MenuIcon size={20} />
                             </button>
 
-                            {/* Breadcrumb */}
                             <div className="hidden sm:flex items-center gap-2 text-sm">
                                 <span className="text-slate-400 font-medium">Portal RH</span>
                                 {currentRoute && (
@@ -313,14 +322,7 @@ export default () => {
                         </div>
 
                         <div className="flex items-center gap-2">
-                            {/* Search hint */}
-                            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-lg text-xs text-slate-400 cursor-pointer hover:bg-slate-200 transition-colors">
-                                <Search size={12} />
-                                <span>Pesquisar...</span>
-                                <kbd className="px-1 py-0.5 bg-white rounded text-[10px] shadow-sm border border-slate-200">⌘K</kbd>
-                            </div>
 
-                            {/* ── Bell de Notificações ── */}
                             <div className="relative" ref={notifRef}>
                                 <button
                                     onClick={handleBellClick}
@@ -331,13 +333,11 @@ export default () => {
                                         }`}
                                 >
                                     <Bell size={18} />
-                                    {/* Badge de contagem */}
                                     {count > 0 ? (
                                         <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center ring-2 ring-white">
                                             {count > 9 ? '9+' : count}
                                         </span>
                                     ) : (
-                                        /* Ponto cinza quando sem notificações — indica que o bell está activo */
                                         <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-slate-300 rounded-full ring-1 ring-white" />
                                     )}
                                 </button>
@@ -353,10 +353,8 @@ export default () => {
                                 )}
                             </div>
 
-                            {/* Divider */}
                             <div className="h-7 w-px bg-slate-200 mx-1" />
 
-                            {/* User Info */}
                             <div className="flex items-center gap-2.5 pl-1">
                                 <div className="text-right hidden sm:block">
                                     <p className="text-[13px] font-bold text-slate-800 leading-tight">
@@ -371,7 +369,6 @@ export default () => {
                         </div>
                     </header>
 
-                    {/* Page Content */}
                     <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 lg:p-6 scroll-smooth bg-[#F8FAFC]">
                         <div className="w-full max-w-[1920px] mx-auto min-h-full">
                             <Outlet />

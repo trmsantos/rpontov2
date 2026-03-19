@@ -91,7 +91,7 @@ const DetalheRHDrawer = ({ item, open, onClose, onRefresh }) => {
 
     const handleViewPDF = () => {
         const token = JSON.parse(localStorage.getItem('auth'))?.access_token;
-        window.open(`${API_URL}/rponto/justificacao/pdf/${item.id}/?token=${token}`, '_blank');
+        window.open(`${API_URL}/rponto/justificacoes/download/${item.id}/?token=${token}`, '_blank');
     };
 
     const podeAprovar = item.status === 1 || item.status === 0; // RH pode aprovar em qualquer estado não final

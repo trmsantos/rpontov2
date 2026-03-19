@@ -46,6 +46,14 @@ const DetalheDrawer = ({ item, open, onClose, onRefresh }) => {
         || ''
     );
 
+    // ✅ FIXED: handleViewPDF was missing — now defined here
+    const handleViewPDF = () => {
+        if (!item?.id) return;
+        const token = auth?.token || localStorage.getItem('token') || '';
+        const url = `${API_URL}/rponto/justificacoes/download/${item.id}/?token=${encodeURIComponent(token)}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+    };
+
     const handleAprovar = async () => {
         if (!numAprovador) {
             openNotification('error', 'top', 'Erro', 'Não foi possível identificar o utilizador. Por favor refresque a página e tente novamente.');
@@ -224,7 +232,6 @@ export default function JustificacoesChefe() {
     const loadData = useCallback(async (filters = {}) => {
         if (!auth?.num) return;
 
-        // ✅ Segurança: chefe sem deps → não carrega
         if (isChefeUser && !isRHUser && deps_chefe.length === 0) {
             console.warn('[JustificacoesChefe] chefe sem deps_chefe');
             return;
@@ -237,11 +244,9 @@ export default function JustificacoesChefe() {
                 withCredentials: true,
                 parameters: { method: "JustificacoesList" },
                 filter: {
-                    // ✅ Papel do utilizador — usado no backend para filtrar
                     isRH:       isRHUser,
                     isChefe:    isChefeUser,
-                    deps_chefe: deps_chefe,   // ← ["DPLAN"] — filtra por dep do colaborador
-                    // Filtros opcionais do formulário
+                    deps_chefe: deps_chefe,
                     ...filters,
                 },
                 pagination: { enabled: true, page: 1, pageSize: 100 }
@@ -259,7 +264,6 @@ export default function JustificacoesChefe() {
         }
     }, [auth?.num, isRHUser, isChefeUser, deps_chefe.length]);
 
-    // ✅ Carregar quando auth estiver pronto
     useEffect(() => {
         if (auth?.num && (isRHUser || (isChefeUser && deps_chefe.length > 0))) {
             loadData({ fstatus: 0 });
@@ -291,7 +295,6 @@ export default function JustificacoesChefe() {
                         {item.nome_colaborador || item.num}
                     </span>
                     <span className="text-xs text-slate-400">{item.num}</span>
-                    {/* ✅ Mostrar dep do colaborador para confirmar que é do dep correto */}
                     {item.dep_codigo && (
                         <Tag color="blue" className="!text-[10px] !px-1 !py-0 !m-0">
                             {item.dep_codigo}
